@@ -1,0 +1,7 @@
+{
+  "python.defaultInterpreterPath": "/home/jozef/Documents/repos/Astro Ai/Plus/.venv/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}"
+  ]
+}

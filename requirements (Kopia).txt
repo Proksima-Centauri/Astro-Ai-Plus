@@ -1,0 +1,9 @@
+numpy
+opencv-python
+sep
+astropy
+photutils
+SpeechRecognition
+onnxruntime
+PyQt5
+pyserial

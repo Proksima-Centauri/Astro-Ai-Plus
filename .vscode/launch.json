@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Astro Ai Plus (venv)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/Astro Ai Plus.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "python": "/home/jozef/Documents/repos/Astro Ai/Plus/.venv/bin/python",
+      "justMyCode": false
+    }
+  ]
+}
