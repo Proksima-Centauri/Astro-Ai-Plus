@@ -1,0 +1,18 @@
+# Pliki, ktorych git ma NIE sledzic.
+# Uwaga: jesli plik juz jest w repo, samo dopisanie go tutaj nie wystarczy -
+# trzeba go najpierw usunac z gita komenda: git rm --cached <plik>
+# (patrz TODO.md, zadania 1 i 2)
+
+# Skompilowane pliki Pythona - powstaja automatycznie przy uruchamianiu
+__pycache__/
+*.pyc
+
+# Wirtualne srodowisko z zainstalowanymi bibliotekami
+.venv/
+
+# Osobista konfiguracja (zawiera klucze API i sciezki z Twojego komputera)
+config
+astro_magic_config.json
+
+# Smieci systemowe macOS
+.DS_Store
