@@ -1,0 +1,41 @@
+{
+  "denoise_model_path": null,
+  "bg_removal_model_path": null,
+  "starnet_path": null,
+  "starnet_stride": 16,
+  "dark_mode": true,
+  "theme_name": "Fusion Dark",
+  "api_key": "yunepronilcfjxqd",
+  "pixel_size_um": 4.3,
+  "focal_length_mm": 447.0,
+  "gemini_api_key": "AQ.Ab8RN6JsWR8_CkKK_W3d2liwu9hvXPSXK2J8MI4xrBMwV4dKYw",
+  "gemini_model": "gemini-2.0-flash-lite",
+  "language": "pl",
+  "processor_cores": 4,
+  "onnx_provider": "Auto",
+  "workspaces": [
+    {
+      "name": "My workspace",
+      "layout": "Custom",
+      "dialogs": [
+        "console",
+        "histogram"
+      ],
+      "geometry": {
+        "console": {
+          "x": 148,
+          "y": 148,
+          "width": 480,
+          "height": 290
+        },
+        "histogram": {
+          "x": 220,
+          "y": 176,
+          "width": 440,
+          "height": 889
+        }
+      }
+    }
+  ],
+  "home_folder": "/home/jozef/Downloads"
+}
