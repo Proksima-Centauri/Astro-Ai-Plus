@@ -55,6 +55,14 @@ except ImportError:
 FIXED_GEMINI_MODEL = "gemini-2.0-flash-lite"
 AI_ASSISTANT_NAME = "Altair"
 ALTAIR_3D_FLY_GUIDE_FILE = "3d_fly_help.md"
+DEFAULT_DEEPSNR_ARGS = "-i \"{input}\" -o \"{output}\" -q -m 2"
+
+
+def normalize_deepsnr_args(raw_args: str) -> str:
+    args = str(raw_args or "").strip()
+    if not args or args == "{input}":
+        return DEFAULT_DEEPSNR_ARGS
+    return args
 
 
 def neutralize_background(image: np.ndarray, roi: tuple) -> np.ndarray:
@@ -542,6 +550,7 @@ I18N = {
     "action_delete_layer": {"pl": "Usuń zaznaczoną warstwę", "en": "Delete Selected Layer"},
     "action_levels": {"pl": "Poziomy", "en": "Levels"},
     "action_curves": {"pl": "Krzywe (LUT)", "en": "Curves (LUT)"},
+    "action_ghs": {"pl": "GHS Stretch", "en": "GHS Stretch"},
     "action_magic": {"pl": "Magic Filter", "en": "Magic Filter"},
     "action_shrink": {"pl": "Zmniejsz gwiazdy", "en": "Star Shrink"},
     "action_plate": {"pl": "Plate Solving", "en": "Plate Solving"},
@@ -553,6 +562,7 @@ I18N = {
     "action_blur": {"pl": "Rozmycie Gaussa", "en": "Gaussian Blur"},
     "action_rotate": {"pl": "Obrót", "en": "Rotate"},
     "action_crop": {"pl": "Kadruj", "en": "Crop"},
+    "action_mosaic": {"pl": "Mozaika kadrów", "en": "Frame Mosaic"},
     "top_open": {"pl": "Otwórz", "en": "Open"},
     "top_save": {"pl": "Zapisz", "en": "Save"},
     "top_save_as": {"pl": "Zapisz jako", "en": "Save As"},
@@ -574,10 +584,12 @@ I18N = {
     "top_blur": {"pl": "Blur", "en": "Blur"},
     "top_rotate": {"pl": "Obrót", "en": "Rotate"},
     "top_crop": {"pl": "Kadr", "en": "Crop"},
+    "top_mosaic": {"pl": "Mozaika", "en": "Mosaic"},
     "top_correction": {"pl": "Korekcja", "en": "Correction"},
     "top_color_calibration": {"pl": "Kalibracja", "en": "Calibration"},
     "top_levels": {"pl": "Poziomy", "en": "Levels"},
     "top_curves": {"pl": "Krzywe", "en": "Curves"},
+    "top_ghs": {"pl": "GHS", "en": "GHS"},
     "top_new_layer": {"pl": "Nowa warstwa", "en": "New Layer"},
     "top_delete_layer": {"pl": "Usuń warstwę", "en": "Delete Layer"},
     "top_adj_levels": {"pl": "Warstwa Poziomy", "en": "Adj Levels"},
@@ -2007,7 +2019,7 @@ class CropDialog(QDialog):
 
 
 class StarNetDialog(QDialog):
-    def __init__(self, parent=None, stride: int = 16, starnet_path: str = None):
+    def __init__(self, parent=None, stride: int = 16, starnet_path: str = None, generate_starmask: bool = False):
         super().__init__(parent)
         apply_dialog_window_flags(self)
         self.setWindowTitle("StarNet++ Settings")
@@ -2039,6 +2051,10 @@ class StarNetDialog(QDialog):
         stride_layout.addWidget(self.spin_stride)
         layout.addLayout(stride_layout)
 
+        self.check_generate_starmask = QCheckBox("Generate StarMask")
+        self.check_generate_starmask.setChecked(bool(generate_starmask))
+        layout.addWidget(self.check_generate_starmask)
+
         button_layout = QHBoxLayout()
         self.btn_run = QPushButton("Run")
         self.btn_run.setProperty("accent", True)
@@ -2053,17 +2069,19 @@ class StarNetDialog(QDialog):
     def get_parameters(self):
         return {
             "stride": int(self.spin_stride.value()),
+            "generate_starmask": bool(self.check_generate_starmask.isChecked()),
         }
 
-    def set_parameters(self, stride: int, starnet_path: str):
+    def set_parameters(self, stride: int, starnet_path: str, generate_starmask: bool = False):
         self.spin_stride.setValue(int(stride))
+        self.check_generate_starmask.setChecked(bool(generate_starmask))
         self.lbl_executable.setText(
             f"StarNet++ executable: {os.path.basename(starnet_path) if starnet_path else 'Not selected'}"
         )
 
 
 class DeepSNRDialog(QDialog):
-    def __init__(self, parent=None, deepsnr_path: str = None, deepsnr_args: str = "{input}"):
+    def __init__(self, parent=None, deepsnr_path: str = None, deepsnr_args: str = DEFAULT_DEEPSNR_ARGS):
         super().__init__(parent)
         apply_dialog_window_flags(self)
         self.setWindowTitle("deepSNR Settings")
@@ -2083,7 +2101,7 @@ class DeepSNRDialog(QDialog):
         layout.addWidget(self.lbl_executable)
 
         layout.addWidget(QLabel("Arguments:"))
-        self.edit_args = QLineEdit(str(deepsnr_args or "{input}"))
+        self.edit_args = QLineEdit(normalize_deepsnr_args(deepsnr_args))
         self.edit_args.setPlaceholderText("-i \"{input}\" -o \"{output}\" -q -m 2")
         layout.addWidget(self.edit_args)
 
@@ -2103,16 +2121,76 @@ class DeepSNRDialog(QDialog):
         self.btn_cancel.clicked.connect(self.reject)
 
     def get_parameters(self):
-        args = str(self.edit_args.text() or "").strip() or "{input}"
+        args = normalize_deepsnr_args(self.edit_args.text())
         return {
             "args": args,
         }
 
     def set_parameters(self, deepsnr_path: str, deepsnr_args: str):
-        self.edit_args.setText(str(deepsnr_args or "{input}"))
+        self.edit_args.setText(normalize_deepsnr_args(deepsnr_args))
         self.lbl_executable.setText(
             f"deepSNR executable: {os.path.basename(deepsnr_path) if deepsnr_path else 'Not selected'}"
         )
+
+
+class MosaicDialog(QDialog):
+    def __init__(self, parent=None, mode: str = "auto", sort_by_name: bool = True):
+        super().__init__(parent)
+        apply_dialog_window_flags(self)
+        self.setWindowTitle("Mosaic Settings")
+        self.setMinimumWidth(420)
+
+        layout = QVBoxLayout(self)
+        apply_standard_layout_margins(layout)
+
+        self.lbl_info = QLabel("Select how frames should be stitched into one mosaic image.")
+        self.lbl_info.setWordWrap(True)
+        layout.addWidget(self.lbl_info)
+
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(QLabel("Stitch mode:"))
+        self.combo_mode = QComboBox()
+        self.combo_mode.addItem("Auto (PANORAMA -> SCANS)", "auto")
+        self.combo_mode.addItem("PANORAMA", "panorama")
+        self.combo_mode.addItem("SCANS", "scans")
+        mode_layout.addWidget(self.combo_mode)
+        layout.addLayout(mode_layout)
+
+        self.check_sort = QCheckBox("Sort files by name before stitching")
+        self.check_sort.setChecked(bool(sort_by_name))
+        layout.addWidget(self.check_sort)
+
+        self.lbl_hint = QLabel("Tip: PANORAMA works best for wide fields, SCANS for grid-like frame sets.")
+        self.lbl_hint.setWordWrap(True)
+        layout.addWidget(self.lbl_hint)
+
+        button_layout = QHBoxLayout()
+        self.btn_run = QPushButton("Run")
+        self.btn_run.setProperty("accent", True)
+        self.btn_cancel = QPushButton("Cancel")
+        button_layout.addWidget(self.btn_run)
+        button_layout.addWidget(self.btn_cancel)
+        layout.addLayout(button_layout)
+
+        self.btn_run.clicked.connect(self.accept)
+        self.btn_cancel.clicked.connect(self.reject)
+        self.set_parameters(mode, sort_by_name)
+
+    def set_parameters(self, mode: str = "auto", sort_by_name: bool = True):
+        wanted = str(mode or "auto").strip().lower()
+        idx = 0
+        for i in range(self.combo_mode.count()):
+            if str(self.combo_mode.itemData(i) or "").strip().lower() == wanted:
+                idx = i
+                break
+        self.combo_mode.setCurrentIndex(idx)
+        self.check_sort.setChecked(bool(sort_by_name))
+
+    def get_parameters(self):
+        return {
+            "mode": str(self.combo_mode.currentData() or "auto"),
+            "sort_by_name": bool(self.check_sort.isChecked()),
+        }
 
 
 class FlyZoneBrushWidget(QWidget):
@@ -3618,6 +3696,18 @@ class Fly3DDialog(QDialog):
     def _remove_stars_now(self):
         app = self.parent()
         starnet_path = str(getattr(app, "starnet_path", "") or "").strip() if app is not None else ""
+
+        if app is not None and hasattr(app, "_get_starnet_dialog"):
+            starnet_settings_dialog = app._get_starnet_dialog()
+            if starnet_settings_dialog.exec_() != QDialog.Accepted:
+                QMessageBox.information(self, "Usun gwiazdy", "Anulowano ustawienia StarNet++.")
+                return
+            params = starnet_settings_dialog.get_parameters()
+            selected_stride = int(params.get("stride") or 16)
+            if hasattr(self, "spin_starless_stride"):
+                self.spin_starless_stride.setValue(selected_stride)
+            if hasattr(app, "starnet_stride"):
+                app.starnet_stride = selected_stride
 
         original_before_starless = self.source_image.copy()
 
@@ -5573,10 +5663,12 @@ class AIAssistantPanel(QFrame):
             "open.levels": "open.levels",
             "open.histogram": "open.histogram",
             "open.correction": "open.correction",
+            "open.ghs": "open.ghs",
             "open.calibration": "open.calibration",
             "open.console": "open.console",
             "open.menu": "open.menu",
             "run.magic": "run.magic",
+            "run.mosaic": "mosaic",
             "run.starnet": "run.starnet",
             "run.starnet++": "run.starnet++",
             "run.deepsnr": "run.deepsnr",
@@ -5604,6 +5696,8 @@ class AIAssistantPanel(QFrame):
             "hist": "hist",
             "correction": "correction",
             "correct": "correct",
+            "ghs": "ghs",
+            "ghsstretch": "ghs stretch",
             "calibration": "calibration",
             "bn": "bn",
             "backgroundneutralization": "background neutralization",
@@ -5614,6 +5708,7 @@ class AIAssistantPanel(QFrame):
             "darkoff": "dark off",
             "models": "models",
             "deepsnr": "deepsnr",
+            "mosaic": "mosaic",
             "exit": "exit",
             "quit": "quit",
             "help": "help",
@@ -5657,6 +5752,8 @@ class AIAssistantPanel(QFrame):
         commands = []
         if "magic" in text or "denoise" in text or "background" in text:
             commands.append("Run.Magic()")
+        if "mosaic" in text or "mozaik" in text or "stitch" in text:
+            commands.append("Run.Mosaic()")
         if "star" in text and ("remove" in text or "removal" in text or "starnet" in text):
             commands.append("Run.StarNet()")
         if "deepsnr" in text or "deep snr" in text:
@@ -5671,6 +5768,8 @@ class AIAssistantPanel(QFrame):
             commands.append("Open.Histogram()")
         if "correction" in text or "camera raw" in text:
             commands.append("Open.Correction()")
+        if "ghs" in text or "hyperbolic" in text:
+            commands.append("Open.GHS()")
         if "calibration" in text:
             commands.append("Open.Calibration()")
         if "background neutralization" in text or "background neutralisation" in text:
@@ -5699,14 +5798,14 @@ class AIAssistantPanel(QFrame):
 
     def validate_ase_code(self, code: str) -> tuple[bool, str]:
         allowed_commands = {
-            "open.curves", "open.levels", "open.histogram", "open.correction", "open.calibration",
-            "open.console", "open.menu", "run.magic", "run.starnet", "run.starnet++", "run.deepsnr",
+            "open.curves", "open.levels", "open.histogram", "open.correction", "open.ghs", "open.calibration",
+            "open.console", "open.menu", "run.magic", "run.mosaic", "run.starnet", "run.starnet++", "run.deepsnr",
             "open.blur", "save", "saveas", "undo", "redo", "platesolve",
             "solveplate", "blur", "gaussianblur", "gaussian", "levels", "level",
             "menu", "console", "curves", "curve", "lut", "curveslut",
-            "curvesreset", "lutreset", "histogram", "hist", "correction", "correct", "calibration", "bn", "backgroundneutralization",
+            "curvesreset", "lutreset", "histogram", "hist", "correction", "correct", "ghs", "ghsstretch", "calibration", "bn", "backgroundneutralization",
             "cameraraw", "reset", "resetsliders", "darkon", "darkoff", "models", "deepsnr",
-            "exit", "quit", "help"
+            "mosaic", "exit", "quit", "help"
         }
         for raw_line in code.splitlines():
             line = raw_line.strip()
@@ -6768,20 +6867,36 @@ class StarNetWorker(QThread):
             creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
             start_time = time.time()
             command = _build_starnet_command(base_command, mode, input_path, output_path, self.stride)
-            output_lines = []
+            output_chunks = []
             live_percent = -1
+
+            def _push_progress(fragment: str):
+                nonlocal live_percent
+                percent = self._extract_progress_percent(fragment)
+                if percent is None or percent <= live_percent:
+                    return
+                live_percent = percent
+                overall = int(round(35.0 + (90.0 - 35.0) * (float(percent) / 100.0)))
+                self.progress_signal.emit(f"Running StarNet++... {percent}%", overall, int(percent))
+
             proc = subprocess.Popen(
                 command,
                 cwd=command_dir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                bufsize=1,
+                text=False,
+                bufsize=0,
                 creationflags=creationflags,
             )
             timeout_sec = 1800
+            stream_fd = proc.stdout.fileno() if proc.stdout is not None else -1
+            if stream_fd >= 0:
+                try:
+                    os.set_blocking(stream_fd, False)
+                except Exception:
+                    pass
+
+            carry = ""
             while True:
                 if time.time() - start_time > timeout_sec:
                     try:
@@ -6790,24 +6905,49 @@ class StarNetWorker(QThread):
                         pass
                     raise subprocess.TimeoutExpired(command, timeout_sec)
 
-                line = ""
-                if proc.stdout is not None:
-                    line = proc.stdout.readline()
+                had_data = False
+                if stream_fd >= 0:
+                    try:
+                        chunk_bytes = os.read(stream_fd, 4096)
+                    except BlockingIOError:
+                        chunk_bytes = b""
+                    except Exception:
+                        chunk_bytes = b""
 
-                if line:
-                    output_lines.append(line)
-                    percent = self._extract_progress_percent(line)
-                    if percent is not None and percent > live_percent:
-                        live_percent = percent
-                        overall = int(round(35.0 + (90.0 - 35.0) * (float(percent) / 100.0)))
-                        self.progress_signal.emit(f"Running StarNet++... {percent}%", overall, int(percent))
-                    continue
+                    if chunk_bytes:
+                        had_data = True
+                        chunk_text = chunk_bytes.decode("utf-8", errors="replace")
+                        output_chunks.append(chunk_text)
+                        _push_progress(chunk_text)
+                        carry += chunk_text
+                        parts = re.split(r"[\r\n]+", carry)
+                        carry = parts[-1] if parts else ""
+                        for part in parts[:-1]:
+                            if part:
+                                _push_progress(part)
 
                 if proc.poll() is not None:
+                    if stream_fd >= 0:
+                        while True:
+                            try:
+                                tail_bytes = os.read(stream_fd, 4096)
+                            except Exception:
+                                tail_bytes = b""
+                            if not tail_bytes:
+                                break
+                            tail_text = tail_bytes.decode("utf-8", errors="replace")
+                            output_chunks.append(tail_text)
+                            _push_progress(tail_text)
+                            carry += tail_text
+                    if carry:
+                        _push_progress(carry)
+                        carry = ""
                     break
-                time.sleep(0.03)
 
-            result_stdout = "".join(output_lines)
+                if not had_data:
+                    time.sleep(0.03)
+
+            result_stdout = "".join(output_chunks)
             result = subprocess.CompletedProcess(command, int(proc.returncode or 0), stdout=result_stdout, stderr="")
 
             if result.returncode != 0:
@@ -6885,6 +7025,38 @@ class StarNetWorker(QThread):
                 seen.add(key)
                 unique_candidates.append(candidate)
         return unique_candidates
+
+
+class DeepSNRWorker(QThread):
+    finished_signal = pyqtSignal(int, str, str, str)
+
+    def __init__(self, command: list, command_cwd: str = None, output_path: str = ""):
+        super().__init__()
+        self.command = list(command or [])
+        self.command_cwd = command_cwd
+        self.output_path = str(output_path or "")
+
+    def run(self):
+        creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        try:
+            result = subprocess.run(
+                self.command,
+                cwd=self.command_cwd,
+                capture_output=True,
+                text=True,
+                timeout=7200,
+                creationflags=creationflags,
+            )
+            self.finished_signal.emit(
+                int(result.returncode or 0),
+                str(result.stdout or ""),
+                str(result.stderr or ""),
+                self.output_path,
+            )
+        except subprocess.TimeoutExpired:
+            self.finished_signal.emit(-999, "", "deepSNR timed out after 2 hours.", self.output_path)
+        except Exception as e:
+            self.finished_signal.emit(-998, "", str(e), self.output_path)
 
 
 def run_starnet_sync_for_image(img: np.ndarray, starnet_path: str = None, stride: int = 16):
@@ -8060,7 +8232,7 @@ class PreferencesDialog(QDialog):
         self.lbl_select_deepsnr_info.setWordWrap(True)
         select_layout.addWidget(self.lbl_select_deepsnr_info)
 
-        self.edit_deepsnr_args = QLineEdit(str(getattr(self.app, "deepsnr_args", "{input}") or "{input}"))
+        self.edit_deepsnr_args = QLineEdit(normalize_deepsnr_args(getattr(self.app, "deepsnr_args", DEFAULT_DEEPSNR_ARGS)))
         self.edit_deepsnr_args.setPlaceholderText("np. --input \"{input}\" --output \"{output}\"")
         select_layout.addWidget(self.edit_deepsnr_args)
 
@@ -8130,7 +8302,7 @@ class PreferencesDialog(QDialog):
         self.lbl_select_starnet_info.setText(f"StarNet++: {starnet_path}")
         self.lbl_select_deepsnr_info.setText(f"deepSNR: {deepsnr_path}")
         if hasattr(self, "edit_deepsnr_args"):
-            self.edit_deepsnr_args.setText(str(getattr(self.app, "deepsnr_args", "{input}") or "{input}"))
+            self.edit_deepsnr_args.setText(normalize_deepsnr_args(getattr(self.app, "deepsnr_args", DEFAULT_DEEPSNR_ARGS)))
 
     def _select_onnx_models_from_preferences(self):
         self.app.select_onnx_models()
@@ -8157,9 +8329,7 @@ class PreferencesDialog(QDialog):
         provider = self.combo_onnx_provider.currentText().strip() or "Auto"
         cpu_cores = int(self.spin_cpu_cores.value())
         gemini_api_key = self.edit_gemini_api_pref.text().strip()
-        deepsnr_args = self.edit_deepsnr_args.text().strip() if hasattr(self, "edit_deepsnr_args") else "{input}"
-        if not deepsnr_args:
-            deepsnr_args = "{input}"
+        deepsnr_args = normalize_deepsnr_args(self.edit_deepsnr_args.text() if hasattr(self, "edit_deepsnr_args") else DEFAULT_DEEPSNR_ARGS)
 
         self.app.gemini_api_key = gemini_api_key
         self.app.deepsnr_args = deepsnr_args
@@ -8576,7 +8746,7 @@ def load_config() -> dict:
         "bg_removal_model_path": None,
         "starnet_path": None,
         "deepsnr_path": None,
-        "deepsnr_args": "{input}",
+        "deepsnr_args": DEFAULT_DEEPSNR_ARGS,
         "starnet_stride": 16,
         "dark_mode": True,
         "theme_name": "Fusion Dark",
@@ -8612,9 +8782,14 @@ def load_config() -> dict:
                 config["bg_removal_model_path"] = None
             if config.get("starnet_path") and not os.path.exists(config["starnet_path"]):
                 config["starnet_path"] = None
-            if config.get("deepsnr_path") and not os.path.exists(config["deepsnr_path"]):
-                config["deepsnr_path"] = None
-            config["deepsnr_args"] = str(config.get("deepsnr_args", "{input}") or "{input}")
+            deepsnr_path = str(config.get("deepsnr_path") or "").strip()
+            if deepsnr_path:
+                if os.path.isabs(deepsnr_path) or os.path.sep in deepsnr_path:
+                    if not os.path.exists(deepsnr_path):
+                        config["deepsnr_path"] = None
+                else:
+                    config["deepsnr_path"] = deepsnr_path
+            config["deepsnr_args"] = normalize_deepsnr_args(config.get("deepsnr_args", DEFAULT_DEEPSNR_ARGS))
 
             if not isinstance(config.get("topbar_button_order"), list):
                 config["topbar_button_order"] = []
@@ -8672,14 +8847,14 @@ def save_config(denoise_path: str = None, bg_removal_path: str = None,
     if deepsnr_path is None:
         deepsnr_path = APP_PREFERENCES.get("deepsnr_path")
     if deepsnr_args is None:
-        deepsnr_args = APP_PREFERENCES.get("deepsnr_args", "{input}")
+        deepsnr_args = APP_PREFERENCES.get("deepsnr_args", DEFAULT_DEEPSNR_ARGS)
 
     config = {
         "denoise_model_path": denoise_path,
         "bg_removal_model_path": bg_removal_path,
         "starnet_path": starnet_path,
         "deepsnr_path": deepsnr_path,
-        "deepsnr_args": str(deepsnr_args or "{input}"),
+        "deepsnr_args": normalize_deepsnr_args(deepsnr_args),
         "starnet_stride": starnet_stride,
         "dark_mode": dark_mode,
         "theme_name": theme_name,
@@ -8717,7 +8892,7 @@ APP_PREFERENCES = {
     "home_folder": "",
     "topbar_button_order": [],
     "deepsnr_path": None,
-    "deepsnr_args": "{input}",
+    "deepsnr_args": DEFAULT_DEEPSNR_ARGS,
 }
 
 
@@ -10334,6 +10509,451 @@ class CurvesWindow(QDialog):
         self.close()
 
 
+class GHSHistogramCurveWidget(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(320)
+        self.setFrameShape(QFrame.StyledPanel)
+        self._hist_r = np.zeros(256, dtype=np.float32)
+        self._hist_g = np.zeros(256, dtype=np.float32)
+        self._hist_b = np.zeros(256, dtype=np.float32)
+        self._show_r = True
+        self._show_g = True
+        self._show_b = True
+        self._show_grid = True
+        self._show_curve = True
+        self._params = {
+            "stretch_factor": 0.0,
+            "local_intensity": 0.0,
+            "symmetry_point": 0.5,
+            "highlight_protection_point": 0.95,
+            "shadow_protection_point": 0.05,
+        }
+
+    def set_image(self, img):
+        if not isinstance(img, np.ndarray) or img.size == 0:
+            return
+        if img.ndim == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        if img.ndim == 3 and img.shape[2] > 3:
+            img = img[:, :, :3]
+        b, g, r = cv2.split(img)
+        self._hist_r = cv2.calcHist([r], [0], None, [256], [0, 256]).flatten()
+        self._hist_g = cv2.calcHist([g], [0], None, [256], [0, 256]).flatten()
+        self._hist_b = cv2.calcHist([b], [0], None, [256], [0, 256]).flatten()
+        self.update()
+
+    def set_params(self, params: dict):
+        if isinstance(params, dict):
+            self._params = dict(params)
+        self.update()
+
+    def set_channel_visibility(self, show_r: bool, show_g: bool, show_b: bool):
+        self._show_r = bool(show_r)
+        self._show_g = bool(show_g)
+        self._show_b = bool(show_b)
+        self.update()
+
+    def set_render_options(self, show_grid: bool, show_curve: bool):
+        self._show_grid = bool(show_grid)
+        self._show_curve = bool(show_curve)
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        w = self.width()
+        h = self.height()
+        left = 12
+        top = 10
+        right = max(left + 1, w - 12)
+        bottom = max(top + 1, h - 12)
+        graph_w = max(1, right - left)
+        graph_h = max(1, bottom - top)
+
+        p.fillRect(0, 0, w, h, QColor("#0a0a0a"))
+
+        if self._show_grid:
+            grid_pen = QPen(QColor("#2e2e2e"), 1)
+            grid_pen.setStyle(Qt.DashLine)
+            p.setPen(grid_pen)
+            for i in range(1, 6):
+                gx = left + int(graph_w * i / 6)
+                gy = top + int(graph_h * i / 6)
+                p.drawLine(gx, top, gx, bottom)
+                p.drawLine(left, gy, right, gy)
+
+        channels = []
+        if self._show_r:
+            channels.append((self._hist_r, QColor(255, 70, 60, 180)))
+        if self._show_g:
+            channels.append((self._hist_g, QColor(120, 215, 80, 180)))
+        if self._show_b:
+            channels.append((self._hist_b, QColor(80, 145, 255, 180)))
+
+        max_val = 1.0
+        for hist, _color in channels:
+            max_val = max(max_val, float(np.max(hist)))
+
+        for hist, color in channels:
+            pts = []
+            for i in range(256):
+                x = left + int(graph_w * i / 255.0)
+                y = bottom - int((float(hist[i]) / max_val) * graph_h)
+                pts.append(QPointF(float(x), float(y)))
+            if pts:
+                path = QPainterPath(pts[0])
+                for point in pts[1:]:
+                    path.lineTo(point)
+                p.setPen(QPen(color, 1.0))
+                p.drawPath(path)
+
+        p.setPen(QPen(QColor("#7a7a7a"), 1))
+        p.drawLine(left, bottom, right, top)
+
+        if self._show_curve:
+            xs = np.linspace(0.0, 1.0, 256, dtype=np.float32)
+            ys = ColorProcessor._ghs_curve_values(
+                xs,
+                float(self._params.get("stretch_factor", 0.0)),
+                float(self._params.get("symmetry_point", 0.5)),
+                float(self._params.get("highlight_protection_point", 0.95)),
+                float(self._params.get("shadow_protection_point", 0.05)),
+            )
+            path = QPainterPath()
+            x0 = left
+            y0 = bottom - int(np.clip(float(ys[0]), 0.0, 1.0) * graph_h)
+            path.moveTo(float(x0), float(y0))
+            for i in range(1, 256):
+                x = left + int(graph_w * i / 255.0)
+                y = bottom - int(np.clip(float(ys[i]), 0.0, 1.0) * graph_h)
+                path.lineTo(float(x), float(y))
+            p.setPen(QPen(QColor("#ff7f5a"), 2.0))
+            p.drawPath(path)
+
+
+class GHSDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        apply_dialog_window_flags(self)
+        self.parent = parent
+        self._session_snapshot = None
+        self._session_dirty = False
+        self._rows = {}
+
+        self.setWindowTitle("Generalized Hyperbolic Stretch")
+        self.setMinimumWidth(1020)
+        self.setMinimumHeight(640)
+
+        layout = QVBoxLayout(self)
+        apply_standard_layout_margins(layout)
+
+        root = QHBoxLayout()
+        root.setSpacing(14)
+        layout.addLayout(root, 1)
+
+        left_col = QVBoxLayout()
+        left_col.setSpacing(8)
+        root.addLayout(left_col, 3)
+
+        self.preview_widget = GHSHistogramCurveWidget()
+        left_col.addWidget(self.preview_widget, 1)
+
+        left_tools = QHBoxLayout()
+        self.btn_r = QPushButton("R")
+        self.btn_g = QPushButton("G")
+        self.btn_b = QPushButton("B")
+        for btn, checked, color in (
+            (self.btn_r, True, "#ff5555"),
+            (self.btn_g, True, "#55ff55"),
+            (self.btn_b, True, "#5599ff"),
+        ):
+            btn.setCheckable(True)
+            btn.setChecked(checked)
+            btn.setFixedWidth(44)
+            btn.setStyleSheet(f"font-weight: bold; color: {color};")
+        self.btn_grid = QPushButton("Grid")
+        self.btn_grid.setCheckable(True)
+        self.btn_grid.setChecked(True)
+        self.btn_curve = QPushButton("Curve")
+        self.btn_curve.setCheckable(True)
+        self.btn_curve.setChecked(True)
+        left_tools.addWidget(self.btn_r)
+        left_tools.addWidget(self.btn_g)
+        left_tools.addWidget(self.btn_b)
+        left_tools.addSpacing(12)
+        left_tools.addWidget(self.btn_grid)
+        left_tools.addWidget(self.btn_curve)
+        left_tools.addStretch(1)
+        left_col.addLayout(left_tools)
+
+        self.lbl_status = QLabel("")
+        self.lbl_status.setStyleSheet("color: #a3aeb7;")
+        left_col.addWidget(self.lbl_status)
+
+        right_col = QVBoxLayout()
+        right_col.setSpacing(10)
+        root.addLayout(right_col, 5)
+
+        row_top = QHBoxLayout()
+        row_top.addWidget(QLabel("Type of stretch"))
+        self.combo_stretch_type = QComboBox()
+        self.combo_stretch_type.addItem("Generalized hyperbolic transform", "generalized_hyperbolic_transform")
+        row_top.addWidget(self.combo_stretch_type, 1)
+        row_top.addSpacing(14)
+        row_top.addWidget(QLabel("Colour stretch model"))
+        self.combo_colour_model = QComboBox()
+        self.combo_colour_model.addItem("Independent channel values", "independent_channel_values")
+        self.combo_colour_model.addItem("Luminance only", "luminance_only")
+        row_top.addWidget(self.combo_colour_model, 1)
+        right_col.addLayout(row_top)
+
+        section = QLabel("Stretch Parameters")
+        section.setStyleSheet("font-weight: bold;")
+        right_col.addWidget(section)
+
+        self._add_param_row(right_col, "Stretch factor (ln(D+1))", "stretch_factor", 0.0, 20.0, 0.01, 4, 0.0)
+        self._add_param_row(right_col, "Local stretch intensity (b)", "local_intensity", 0.0, 1.0, 0.001, 4, 0.0)
+        self._add_param_row(right_col, "Symmetry point (SP)", "symmetry_point", 0.0, 1.0, 0.0001, 5, 0.5)
+        self._add_param_row(right_col, "Shadow protection point (LP)", "shadow_protection_point", 0.0, 1.0, 0.0001, 5, 0.05)
+        self._add_param_row(right_col, "Highlight protection point (HP)", "highlight_protection_point", 0.0, 1.0, 0.0001, 5, 0.95)
+        right_col.addStretch(1)
+
+        buttons = QHBoxLayout()
+        self.btn_reset = QPushButton("Reset")
+        self.btn_ok = QPushButton("OK")
+        self.btn_apply = QPushButton("Apply")
+        self.btn_close = QPushButton("Close")
+        buttons.addStretch(1)
+        buttons.addWidget(self.btn_reset)
+        buttons.addWidget(self.btn_close)
+        buttons.addWidget(self.btn_apply)
+        buttons.addWidget(self.btn_ok)
+        layout.addLayout(buttons)
+
+        self.btn_r.toggled.connect(self._on_preview_options_changed)
+        self.btn_g.toggled.connect(self._on_preview_options_changed)
+        self.btn_b.toggled.connect(self._on_preview_options_changed)
+        self.btn_grid.toggled.connect(self._on_preview_options_changed)
+        self.btn_curve.toggled.connect(self._on_preview_options_changed)
+        self.combo_stretch_type.currentIndexChanged.connect(self._on_value_changed)
+        self.combo_colour_model.currentIndexChanged.connect(self._on_value_changed)
+        self.btn_reset.clicked.connect(self.reset_defaults)
+        self.btn_apply.clicked.connect(self._apply)
+        self.btn_ok.clicked.connect(self._ok)
+        self.btn_close.clicked.connect(self.close)
+
+        self._on_preview_options_changed()
+        self._refresh_labels()
+
+    def _add_param_row(self, parent_layout, label_text, key, min_v, max_v, step, decimals, default):
+        row = QVBoxLayout()
+        row.setSpacing(4)
+        top = QHBoxLayout()
+        label = QLabel(label_text)
+        spin = QDoubleSpinBox()
+        spin.setRange(float(min_v), float(max_v))
+        spin.setDecimals(int(decimals))
+        spin.setSingleStep(float(step))
+        spin.setValue(float(default))
+        spin.setFixedWidth(110)
+        btn_reset = QPushButton("Reset")
+        btn_reset.setFixedWidth(58)
+        top.addWidget(label)
+        top.addStretch(1)
+        top.addWidget(spin)
+        top.addWidget(btn_reset)
+        row.addLayout(top)
+
+        slider = QSlider(Qt.Horizontal)
+        scale = 10000
+        slider.setRange(int(round(min_v * scale)), int(round(max_v * scale)))
+        slider.setSingleStep(max(1, int(round(step * scale))))
+        slider.setPageStep(max(1, int(round(step * scale * 10))))
+        slider.setValue(int(round(default * scale)))
+        row.addWidget(slider)
+        parent_layout.addLayout(row)
+
+        self._rows[key] = {
+            "spin": spin,
+            "slider": slider,
+            "scale": scale,
+            "default": float(default),
+        }
+
+        def _sync_from_slider(raw):
+            value = float(raw) / float(scale)
+            spin.blockSignals(True)
+            spin.setValue(value)
+            spin.blockSignals(False)
+            self._on_value_changed()
+
+        def _sync_from_spin(value):
+            slider.blockSignals(True)
+            slider.setValue(int(round(float(value) * scale)))
+            slider.blockSignals(False)
+            self._on_value_changed()
+
+        slider.valueChanged.connect(_sync_from_slider)
+        spin.valueChanged.connect(_sync_from_spin)
+        btn_reset.clicked.connect(lambda: spin.setValue(float(default)))
+
+    def _slider_value(self, key: str) -> float:
+        row = self._rows.get(key, {})
+        spin = row.get("spin")
+        return float(spin.value()) if spin is not None else 0.0
+
+    def _set_slider_value(self, key: str, value: float):
+        row = self._rows.get(key, {})
+        spin = row.get("spin")
+        slider = row.get("slider")
+        scale = int(row.get("scale", 10000))
+        if spin is None or slider is None:
+            return
+        spin.blockSignals(True)
+        slider.blockSignals(True)
+        spin.setValue(float(value))
+        slider.setValue(int(round(float(value) * scale)))
+        slider.blockSignals(False)
+        spin.blockSignals(False)
+
+    def get_params(self) -> dict:
+        return {
+            "stretch_type": str(self.combo_stretch_type.currentData() or "generalized_hyperbolic_transform"),
+            "colour_stretch_model": str(self.combo_colour_model.currentData() or "independent_channel_values"),
+            "stretch_factor": float(self._slider_value("stretch_factor")),
+            "local_intensity": float(self._slider_value("local_intensity")),
+            "symmetry_point": float(self._slider_value("symmetry_point")),
+            "highlight_protection_point": float(self._slider_value("highlight_protection_point")),
+            "shadow_protection_point": float(self._slider_value("shadow_protection_point")),
+        }
+
+    def set_params(self, params: dict, notify=False):
+        params = params if isinstance(params, dict) else {}
+        stretch_type = str(params.get("stretch_type", "generalized_hyperbolic_transform"))
+        colour_model = str(params.get("colour_stretch_model", "independent_channel_values"))
+
+        stretch_idx = max(0, self.combo_stretch_type.findData(stretch_type))
+        color_idx = max(0, self.combo_colour_model.findData(colour_model))
+        self.combo_stretch_type.blockSignals(True)
+        self.combo_colour_model.blockSignals(True)
+        self.combo_stretch_type.setCurrentIndex(stretch_idx)
+        self.combo_colour_model.setCurrentIndex(color_idx)
+        self.combo_stretch_type.blockSignals(False)
+        self.combo_colour_model.blockSignals(False)
+
+        self._set_slider_value("stretch_factor", float(np.clip(params.get("stretch_factor", 0.0), 0.0, 20.0)))
+        self._set_slider_value("local_intensity", float(np.clip(params.get("local_intensity", 0.0), 0.0, 1.0)))
+        self._set_slider_value("symmetry_point", float(np.clip(params.get("symmetry_point", 0.5), 0.0, 1.0)))
+        self._set_slider_value("highlight_protection_point", float(np.clip(params.get("highlight_protection_point", 0.95), 0.0, 1.0)))
+        self._set_slider_value("shadow_protection_point", float(np.clip(params.get("shadow_protection_point", 0.05), 0.0, 1.0)))
+        self._refresh_labels()
+        self.preview_widget.set_params(self.get_params())
+        if notify:
+            self._on_value_changed()
+
+    def reset_defaults(self):
+        self.set_params(
+            {
+                "stretch_type": "generalized_hyperbolic_transform",
+                "colour_stretch_model": "independent_channel_values",
+                "stretch_factor": 0.0,
+                "local_intensity": 0.0,
+                "symmetry_point": 0.5,
+                "highlight_protection_point": 0.95,
+                "shadow_protection_point": 0.05,
+            },
+            notify=True,
+        )
+
+    def _capture_snapshot(self):
+        return self.get_params()
+
+    def _apply_snapshot(self, snapshot):
+        self.set_params(snapshot, notify=False)
+
+    def showEvent(self, event):
+        if self.parent is not None and hasattr(self.parent, "ghs_params"):
+            self.set_params(self.parent.ghs_params, notify=False)
+        self._session_snapshot = self._capture_snapshot()
+        self._session_dirty = False
+        self._refresh_histogram_preview()
+        super().showEvent(event)
+
+    def closeEvent(self, event):
+        if self._session_dirty and self._session_snapshot is not None:
+            self._apply_snapshot(self._session_snapshot)
+            if self.parent is not None and hasattr(self.parent, "set_ghs_params"):
+                self.parent.set_ghs_params(self.get_params(), apply_processing=True)
+                self._refresh_histogram_preview(getattr(self.parent, "processed_img", None))
+                self.parent.log("GHS canceled.")
+        self._session_dirty = False
+        super().closeEvent(event)
+
+    def _on_preview_options_changed(self):
+        self.preview_widget.set_channel_visibility(self.btn_r.isChecked(), self.btn_g.isChecked(), self.btn_b.isChecked())
+        self.preview_widget.set_render_options(self.btn_grid.isChecked(), self.btn_curve.isChecked())
+
+    def _refresh_histogram_preview(self, img=None):
+        source = img
+        if source is None and self.parent is not None:
+            source = getattr(self.parent, "processed_img", None)
+            if source is None:
+                source = getattr(self.parent, "magic_img", None)
+            if source is None:
+                source = getattr(self.parent, "original_img", None)
+        if not isinstance(source, np.ndarray) or source.size == 0:
+            return
+        if source.ndim == 2:
+            source = cv2.cvtColor(source, cv2.COLOR_GRAY2BGR)
+        if source.ndim == 3 and source.shape[2] > 3:
+            source = source[:, :, :3]
+        self.preview_widget.set_image(source)
+        self.preview_widget.set_params(self.get_params())
+
+    def _refresh_labels(self):
+        params = self.get_params()
+        self.lbl_status.setText(
+            "SF={:.4f}  b={:.4f}  SP={:.5f}  LP={:.5f}  HP={:.5f}".format(
+                float(params.get("stretch_factor", 0.0)),
+                float(params.get("local_intensity", 0.0)),
+                float(params.get("symmetry_point", 0.5)),
+                float(params.get("shadow_protection_point", 0.05)),
+                float(params.get("highlight_protection_point", 0.95)),
+            )
+        )
+
+    def _on_value_changed(self, _value=None):
+        self._refresh_labels()
+        self._session_dirty = True
+        params = self.get_params()
+        self.preview_widget.set_params(params)
+        if self.parent is not None and hasattr(self.parent, "set_ghs_params"):
+            self.parent.set_ghs_params(params, apply_processing=True)
+            self._refresh_histogram_preview(getattr(self.parent, "processed_img", None))
+
+    def _apply(self):
+        if self.parent is not None and hasattr(self.parent, "set_ghs_params"):
+            params = self.get_params()
+            self.parent.set_ghs_params(params, apply_processing=True)
+            self._refresh_histogram_preview(getattr(self.parent, "processed_img", None))
+            if self.parent.processed_img is not None:
+                self.parent.add_thumbnail(
+                    "GHS (SF:{:.2f}, SP:{:.2f})".format(
+                        float(params.get("stretch_factor", 0.0)),
+                        float(params.get("symmetry_point", 0.5)),
+                    ),
+                    self.parent.processed_img,
+                )
+            self.parent.log("GHS applied.")
+        self._session_snapshot = self._capture_snapshot()
+        self._session_dirty = False
+
+    def _ok(self):
+        self._apply()
+        self.close()
+
+
 class ZoomRangeSlider(QFrame):
     rangeChanged = pyqtSignal(float, float)
 
@@ -10629,10 +11249,12 @@ class ConsoleCommandInput(QLineEdit):
         "save",
         "save as",
         "open",
+        "mosaic",
         "curves",
         "levels",
         "histogram",
         "correction",
+        "ghs",
         "menu",
         "console",
         "magic",
@@ -10800,10 +11422,12 @@ class ConsoleWindow(QDialog):
             "open.levels": "levels",
             "open.histogram": "histogram",
             "open.correction": "correction",
+            "open.ghs": "ghs",
             "open.calibration": "calibration",
             "open.console": "console",
             "open.menu": "menu",
             "run.magic": "magic",
+            "run.mosaic": "mosaic",
             "run.starnet": "starnet++",
             "run.starnet++": "starnet++",
             "run.deepsnr": "deepsnr",
@@ -11540,10 +12164,125 @@ class ColorProcessor:
         return np.clip(img * (1.0 - blend) + denoised * blend, 0, 1)
 
     @staticmethod
+    def _ghs_curve_values(
+        values: np.ndarray,
+        stretch_factor: float,
+        symmetry_point: float,
+        highlight_protection_point: float,
+        shadow_protection_point: float,
+    ) -> np.ndarray:
+        values = np.clip(values.astype(np.float32), 0.0, 1.0)
+        stretch_factor = float(max(0.0, stretch_factor))
+        if stretch_factor <= 1e-6:
+            return values
+
+        shadow_point = float(np.clip(shadow_protection_point, 0.0, 0.95))
+        highlight_point = float(np.clip(highlight_protection_point, 0.05, 1.0))
+        if highlight_point <= shadow_point + 0.02:
+            highlight_point = min(1.0, shadow_point + 0.02)
+        symmetry_point = float(np.clip(symmetry_point, shadow_point + 0.01, highlight_point - 0.01))
+
+        denom = max(1e-6, highlight_point - shadow_point)
+        normalized = np.clip((values - shadow_point) / denom, 0.0, 1.0)
+        symmetry_norm = float(np.clip((symmetry_point - shadow_point) / denom, 0.01, 0.99))
+        k = max(1e-6, stretch_factor)
+        norm_denom = np.arcsinh(k)
+
+        left_mask = normalized <= symmetry_norm
+        right_mask = ~left_mask
+        out_norm = np.empty_like(normalized, dtype=np.float32)
+
+        left_scale = max(1e-6, symmetry_norm)
+        left_x = np.clip(normalized[left_mask] / left_scale, 0.0, 1.0)
+        out_norm[left_mask] = left_scale * (np.arcsinh(k * left_x) / norm_denom)
+
+        right_scale = max(1e-6, 1.0 - symmetry_norm)
+        right_x = np.clip((1.0 - normalized[right_mask]) / right_scale, 0.0, 1.0)
+        out_norm[right_mask] = 1.0 - right_scale * (np.arcsinh(k * right_x) / norm_denom)
+
+        stretched = np.clip(shadow_point + out_norm * denom, 0.0, 1.0)
+
+        transition = 0.03
+
+        def _smoothstep(edge0, edge1, x):
+            t = np.clip((x - edge0) / max(1e-6, edge1 - edge0), 0.0, 1.0)
+            return t * t * (3.0 - 2.0 * t)
+
+        shadow_weight = _smoothstep(shadow_point, shadow_point + transition, values)
+        highlight_weight = 1.0 - _smoothstep(highlight_point - transition, highlight_point, values)
+        protect_weight = shadow_weight * highlight_weight
+        return np.clip(values + (stretched - values) * protect_weight, 0.0, 1.0)
+
+    @staticmethod
+    def _apply_ghs_stretch(
+        img: np.ndarray,
+        stretch_factor: float,
+        local_intensity: float,
+        symmetry_point: float,
+        highlight_protection_point: float,
+        shadow_protection_point: float,
+        colour_stretch_model: str = "independent_channel_values",
+    ) -> np.ndarray:
+        stretch_factor = float(max(0.0, stretch_factor))
+        if stretch_factor <= 1e-6:
+            return np.clip(img, 0, 1)
+
+        local_intensity = float(np.clip(local_intensity, 0.0, 1.0))
+        color_model = str(colour_stretch_model or "independent_channel_values").strip().lower()
+
+        img = np.clip(img.astype(np.float32), 0, 1)
+        if color_model == "luminance_only":
+            img_u8 = np.clip(img * 255.0, 0, 255).astype(np.uint8)
+            hsv = cv2.cvtColor(img_u8, cv2.COLOR_BGR2HSV)
+            h, s, v = cv2.split(hsv)
+            v_f = v.astype(np.float32) / 255.0
+
+            if local_intensity > 1e-6:
+                local_base = cv2.GaussianBlur(v_f, (0, 0), 6.0)
+                local_detail = v_f - local_base
+                v_work = np.clip(v_f + local_detail * (0.6 * local_intensity), 0.0, 1.0)
+            else:
+                v_work = v_f
+
+            v_out = ColorProcessor._ghs_curve_values(
+                v_work,
+                stretch_factor,
+                symmetry_point,
+                highlight_protection_point,
+                shadow_protection_point,
+            )
+
+            hsv_out = cv2.merge([h, s, np.clip(v_out * 255.0, 0, 255).astype(np.uint8)])
+            out = cv2.cvtColor(hsv_out, cv2.COLOR_HSV2BGR).astype(np.float32) / 255.0
+            return np.clip(out, 0, 1)
+
+        out = img.copy()
+        if out.ndim == 2:
+            out = cv2.cvtColor(np.clip(out * 255.0, 0, 255).astype(np.uint8), cv2.COLOR_GRAY2BGR).astype(np.float32) / 255.0
+        for c in range(min(3, out.shape[2])):
+            channel = out[:, :, c]
+            if local_intensity > 1e-6:
+                local_base = cv2.GaussianBlur(channel, (0, 0), 6.0)
+                local_detail = channel - local_base
+                channel_work = np.clip(channel + local_detail * (0.6 * local_intensity), 0.0, 1.0)
+            else:
+                channel_work = channel
+            out[:, :, c] = ColorProcessor._ghs_curve_values(
+                channel_work,
+                stretch_factor,
+                symmetry_point,
+                highlight_protection_point,
+                shadow_protection_point,
+            )
+
+        return np.clip(out, 0, 1)
+
+    @staticmethod
     def apply_camera_raw_and_hsl(
         base_img: np.ndarray,
         basic_params: dict,
         hsl_params: dict,
+        ghs_params: dict | None = None,
     ) -> np.ndarray:
         if base_img is None:
             return None
@@ -11563,6 +12302,14 @@ class ColorProcessor:
         dehaze = basic_params.get("dehaze", 0.0)
         clarity = basic_params.get("clarity", 0.0)
         noise_reduction = basic_params.get("noise_reduction", 0.0)
+
+        ghs_params = ghs_params if isinstance(ghs_params, dict) else {}
+        ghs_stretch_factor = float(max(0.0, ghs_params.get("stretch_factor", 0.0)))
+        ghs_local_intensity = float(np.clip(ghs_params.get("local_intensity", 0.0), 0.0, 1.0))
+        ghs_symmetry_point = float(np.clip(ghs_params.get("symmetry_point", 0.5), 0.0, 1.0))
+        ghs_highlight_point = float(np.clip(ghs_params.get("highlight_protection_point", 0.95), 0.0, 1.0))
+        ghs_shadow_point = float(np.clip(ghs_params.get("shadow_protection_point", 0.05), 0.0, 1.0))
+        ghs_colour_model = str(ghs_params.get("colour_stretch_model", "independent_channel_values") or "independent_channel_values")
 
         b, g, r = cv2.split(img)
 
@@ -11592,6 +12339,17 @@ class ColorProcessor:
         img *= 2.0 ** exposure
         img = (img - 0.5) * (1.0 + contrast) + 0.5
         img = np.clip(img, 0, 1)
+
+        if ghs_stretch_factor > 0.0:
+            img = ColorProcessor._apply_ghs_stretch(
+                img,
+                ghs_stretch_factor,
+                ghs_local_intensity,
+                ghs_symmetry_point,
+                ghs_highlight_point,
+                ghs_shadow_point,
+                ghs_colour_model,
+            )
 
         if texture != 0.0 or clarity != 0.0:
             local_blur = cv2.GaussianBlur(img, (0, 0), 3.0)
@@ -12992,6 +13750,33 @@ class ReorderableTopActionsBar(QFrame):
         return layout.count()
 
 class AstroApp(QMainWindow):
+    @staticmethod
+    def _default_ghs_params() -> dict:
+        return {
+            "stretch_type": "generalized_hyperbolic_transform",
+            "colour_stretch_model": "independent_channel_values",
+            "stretch_factor": 0.0,
+            "local_intensity": 0.0,
+            "symmetry_point": 0.5,
+            "highlight_protection_point": 0.95,
+            "shadow_protection_point": 0.05,
+        }
+
+    def set_ghs_params(self, params: dict, apply_processing: bool = True):
+        defaults = self._default_ghs_params()
+        source = params if isinstance(params, dict) else {}
+        self.ghs_params = {
+            "stretch_type": str(source.get("stretch_type", defaults["stretch_type"]) or defaults["stretch_type"]),
+            "colour_stretch_model": str(source.get("colour_stretch_model", defaults["colour_stretch_model"]) or defaults["colour_stretch_model"]),
+            "stretch_factor": float(max(0.0, source.get("stretch_factor", defaults["stretch_factor"]))),
+            "local_intensity": float(np.clip(source.get("local_intensity", defaults["local_intensity"]), 0.0, 1.0)),
+            "symmetry_point": float(np.clip(source.get("symmetry_point", defaults["symmetry_point"]), 0.0, 1.0)),
+            "highlight_protection_point": float(np.clip(source.get("highlight_protection_point", defaults["highlight_protection_point"]), 0.0, 1.0)),
+            "shadow_protection_point": float(np.clip(source.get("shadow_protection_point", defaults["shadow_protection_point"]), 0.0, 1.0)),
+        }
+        if apply_processing:
+            self.apply_full_processing()
+
     def _inject_background_calibration(self, basic_params: dict) -> dict:
         params = dict(basic_params or {})
         gains = getattr(self, "background_calibration_rgb", {}) or {}
@@ -13019,6 +13804,7 @@ class AstroApp(QMainWindow):
             base_img,
             basic_params,
             hsl_params,
+            self.ghs_params,
         )
 
         # đź”Ą DODAJ LEVELS
@@ -13080,6 +13866,7 @@ class AstroApp(QMainWindow):
             preview_img,
             basic_params,
             hsl_params,
+            self.ghs_params,
         )
 
         levels = self.levels_window.levels_widget.get_params()
@@ -13194,6 +13981,9 @@ class AstroApp(QMainWindow):
     def reset_all_sliders(self):
         self.last_color_calibration_method = None
         self.background_calibration_rgb = {"r": 0.0, "g": 0.0, "b": 0.0}
+        self.set_ghs_params(self._default_ghs_params(), apply_processing=False)
+        if hasattr(self, "ghs_dialog") and self.ghs_dialog is not None:
+            self.ghs_dialog.set_params(self.ghs_params, notify=False)
         self.camera_raw_panel.sld_temp.setValue(0)
         self.camera_raw_panel.sld_tint.setValue(0)
         self.camera_raw_panel.sld_exp.setValue(0)
@@ -13319,8 +14109,23 @@ class AstroApp(QMainWindow):
         return temp_path
 
     def run_deepsnr(self):
-        if not self.deepsnr_path or not os.path.exists(self.deepsnr_path):
-            self.log("deepSNR path is not set. Select deepSNR in Preferences first.", "warning")
+        resolved_deepsnr = ""
+        explicit_deepsnr = str(getattr(self, "deepsnr_path", "") or "").strip()
+        if explicit_deepsnr:
+            if os.path.isabs(explicit_deepsnr) or os.path.sep in explicit_deepsnr:
+                if os.path.exists(explicit_deepsnr):
+                    resolved_deepsnr = explicit_deepsnr
+            else:
+                resolved_deepsnr = shutil.which(explicit_deepsnr) or ""
+
+        if not resolved_deepsnr:
+            for candidate in ("deepsnr", "deepsnr.exe", "deepSNR", "deepSNR.exe"):
+                resolved_deepsnr = shutil.which(candidate) or ""
+                if resolved_deepsnr:
+                    break
+
+        if not resolved_deepsnr:
+            self.log("deepSNR executable not found. Set path in Preferences or add deepSNR to PATH.", "warning")
             return
 
         dialog = self._get_deepsnr_dialog()
@@ -13329,7 +14134,7 @@ class AstroApp(QMainWindow):
             return
 
         params = dialog.get_parameters()
-        self.deepsnr_args = str(params.get("args") or "{input}").strip() or "{input}"
+        self.deepsnr_args = normalize_deepsnr_args(params.get("args"))
         APP_PREFERENCES["deepsnr_args"] = self.deepsnr_args
         save_config(
             self.denoise_model_path,
@@ -13347,9 +14152,7 @@ class AstroApp(QMainWindow):
         )
 
         input_path = self._export_temp_image_for_external_tool("deepsnr")
-        args_template = str(getattr(self, "deepsnr_args", "{input}") or "{input}").strip()
-        if not args_template:
-            args_template = "{input}"
+        args_template = normalize_deepsnr_args(getattr(self, "deepsnr_args", DEFAULT_DEEPSNR_ARGS))
         if "{input}" in args_template and not input_path:
             self.log("deepSNR skipped: no image loaded for {input} argument.", "warning")
             return
@@ -13371,37 +14174,75 @@ class AstroApp(QMainWindow):
             self.log(f"deepSNR args parse error: {e}", "error")
             return
 
-        command = [self.deepsnr_path] + args_list
-        if self.deepsnr_path.lower().endswith(".py"):
-            command = [sys.executable, self.deepsnr_path] + args_list
+        command = [resolved_deepsnr] + args_list
+        if resolved_deepsnr.lower().endswith(".py"):
+            command = [sys.executable, resolved_deepsnr] + args_list
 
-        creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        try:
-            if output_path:
-                result = subprocess.run(
-                    command,
-                    cwd=os.path.dirname(self.deepsnr_path) or None,
-                    capture_output=True,
-                    text=True,
-                    timeout=7200,
-                    creationflags=creationflags,
-                )
-                if result.returncode != 0:
-                    stderr = (result.stderr or "").strip()
-                    self.log(f"deepSNR failed (code {result.returncode}): {stderr or 'no stderr'}", "error")
-                    return
-                if os.path.exists(output_path):
-                    self.load_image_from_path(output_path)
-                    self.log(f"deepSNR finished. Loaded output: {output_path}", "success")
-                else:
-                    self.log("deepSNR finished but output file was not created.", "warning")
-            else:
-                subprocess.Popen(command, cwd=os.path.dirname(self.deepsnr_path) or None, creationflags=creationflags)
-                self.log("deepSNR started (background).", "success")
-        except subprocess.TimeoutExpired:
+        command_cwd = None
+        if os.path.isabs(resolved_deepsnr) or os.path.sep in resolved_deepsnr:
+            command_cwd = os.path.dirname(resolved_deepsnr) or None
+
+        self._start_deepsnr_progress_dialog()
+        self.deepsnr_worker = DeepSNRWorker(command, command_cwd=command_cwd, output_path=output_path)
+        self.deepsnr_worker.finished_signal.connect(self._on_deepsnr_finished)
+        self.deepsnr_worker.start()
+
+    def _start_deepsnr_progress_dialog(self):
+        self._stop_deepsnr_progress_dialog()
+        self.progress_dialog = MagicProgressDialog(self)
+        self.progress_dialog.setWindowTitle("Denoising")
+        self.progress_dialog.update_progress("deepSNR: denoising...", 5, 0)
+        self.progress_dialog.show()
+
+        self._deepsnr_progress_value = 5
+        self.deepsnr_progress_timer = QTimer(self)
+        self.deepsnr_progress_timer.setInterval(120)
+        self.deepsnr_progress_timer.timeout.connect(self._pulse_deepsnr_progress_dialog)
+        self.deepsnr_progress_timer.start()
+
+    def _pulse_deepsnr_progress_dialog(self):
+        dialog = getattr(self, "progress_dialog", None)
+        if dialog is None:
+            return
+        value = int(getattr(self, "_deepsnr_progress_value", 5))
+        value = min(95, value + 1)
+        self._deepsnr_progress_value = value
+        dialog.update_progress("deepSNR: denoising...", value, value)
+
+    def _stop_deepsnr_progress_dialog(self):
+        timer = getattr(self, "deepsnr_progress_timer", None)
+        if timer is not None:
+            timer.stop()
+            timer.deleteLater()
+            self.deepsnr_progress_timer = None
+        if hasattr(self, "progress_dialog") and self.progress_dialog is not None:
+            self.progress_dialog.close()
+            self.progress_dialog = None
+
+    def _on_deepsnr_finished(self, return_code: int, stdout_text: str, stderr_text: str, output_path: str):
+        self._stop_deepsnr_progress_dialog()
+        self.deepsnr_worker = None
+
+        if int(return_code) == -999:
             self.log("deepSNR timed out after 2 hours.", "error")
-        except Exception as e:
-            self.log(f"deepSNR failed to start: {e}", "error")
+            return
+        if int(return_code) == -998:
+            self.log(f"deepSNR failed to start: {stderr_text}", "error")
+            return
+        if int(return_code) != 0:
+            details = str(stderr_text or "").strip() or str(stdout_text or "").strip() or "no stderr"
+            self.log(f"deepSNR failed (code {int(return_code)}): {details}", "error")
+            return
+
+        if output_path:
+            if os.path.exists(output_path):
+                self.load_image_from_path(output_path)
+                self.log(f"deepSNR finished. Loaded output: {output_path}", "success")
+            else:
+                self.log("deepSNR finished but output file was not created.", "warning")
+            return
+
+        self.log("deepSNR finished.", "success")
 
     def __init__(self):
         super().__init__()
@@ -13503,6 +14344,7 @@ class AstroApp(QMainWindow):
         self.plate_solve_dialog = None
         self.starnet_dialog = None
         self.deepsnr_dialog = None
+        self.mosaic_dialog = None
         self.fly3d_dialog = None
         self.preferences_dialog = None
         self.active_image_window = None
@@ -13547,7 +14389,10 @@ class AstroApp(QMainWindow):
         self.bg_removal_model_path = None
         self.starnet_path = None
         self.deepsnr_path = None
-        self.deepsnr_args = "{input}"
+        self.deepsnr_args = DEFAULT_DEEPSNR_ARGS
+        self.starnet_generate_starmask = False
+        self.mosaic_mode = "auto"
+        self.mosaic_sort_by_name = True
         self.starnet_stride = 16
 
         # ---------- theme ----------
@@ -13564,7 +14409,7 @@ class AstroApp(QMainWindow):
         self.bg_removal_model_path = config.get("bg_removal_model_path")
         self.starnet_path = config.get("starnet_path")
         self.deepsnr_path = config.get("deepsnr_path")
-        self.deepsnr_args = str(config.get("deepsnr_args", "{input}") or "{input}")
+        self.deepsnr_args = normalize_deepsnr_args(config.get("deepsnr_args", DEFAULT_DEEPSNR_ARGS))
         self.starnet_stride = int(config.get("starnet_stride") or 16)
         self.theme_name = config.get("theme_name") or ("Fusion Dark" if config.get("dark_mode", True) else "Light")
         self.language = config.get("language", "pl") or "pl"
@@ -13587,10 +14432,12 @@ class AstroApp(QMainWindow):
         APP_PREFERENCES["topbar_button_order"] = list(self.topbar_button_order)
         APP_PREFERENCES["deepsnr_path"] = self.deepsnr_path
         APP_PREFERENCES["deepsnr_args"] = self.deepsnr_args
+        self.ghs_params = self._default_ghs_params()
 
         # ---------- windows ----------
         self.levels_window = LevelsWindow(parent=self)
         self.curves_window = CurvesWindow(parent=self)
+        self.ghs_dialog = GHSDialog(parent=self)
 
         self.histogram_window = HistogramWindow(parent=self)
         self._zoom_sync_in_progress = False
@@ -13699,9 +14546,14 @@ class AstroApp(QMainWindow):
                 self,
                 stride=self.starnet_stride,
                 starnet_path=self.starnet_path,
+                generate_starmask=bool(getattr(self, "starnet_generate_starmask", False)),
             )
         else:
-            self.starnet_dialog.set_parameters(self.starnet_stride, self.starnet_path)
+            self.starnet_dialog.set_parameters(
+                self.starnet_stride,
+                self.starnet_path,
+                generate_starmask=bool(getattr(self, "starnet_generate_starmask", False)),
+            )
         return self.starnet_dialog
 
     def _get_deepsnr_dialog(self):
@@ -13714,6 +14566,20 @@ class AstroApp(QMainWindow):
         else:
             self.deepsnr_dialog.set_parameters(self.deepsnr_path, self.deepsnr_args)
         return self.deepsnr_dialog
+
+    def _get_mosaic_dialog(self):
+        if self.mosaic_dialog is None:
+            self.mosaic_dialog = MosaicDialog(
+                self,
+                mode=getattr(self, "mosaic_mode", "auto"),
+                sort_by_name=bool(getattr(self, "mosaic_sort_by_name", True)),
+            )
+        else:
+            self.mosaic_dialog.set_parameters(
+                mode=getattr(self, "mosaic_mode", "auto"),
+                sort_by_name=bool(getattr(self, "mosaic_sort_by_name", True)),
+            )
+        return self.mosaic_dialog
 
     def _get_fly3d_dialog(self):
         source = self.get_effective_magic_img() if self.magic_img is not None else None
@@ -14089,6 +14955,9 @@ class AstroApp(QMainWindow):
         if lower in ("crop", "kadruj", "kadrowanie"):
             self.crop_image_dialog()
             return
+        if lower in ("mosaic", "mozaika", "stitch", "stitching", "panorama"):
+            self.create_mosaic_from_frames()
+            return
         if lower in ("levels", "level"):
             self.show_levels_window()
             return
@@ -14100,6 +14969,9 @@ class AstroApp(QMainWindow):
             return
         if lower in ("curves", "curve", "lut", "curves lut", "curves (lut)"):
             self.show_curves_window()
+            return
+        if lower in ("ghs", "ghs stretch", "generalized hyperbolic stretch", "generalised hyperbolic stretch"):
+            self.show_ghs_dialog()
             return
         if lower in ("curves reset", "curve reset", "lut reset"):
             self.curves_window.reset_curves()
@@ -14162,9 +15034,11 @@ class AstroApp(QMainWindow):
             "blur                     open Gaussian Blur dialog",
             "rotate                   open Rotate dialog",
             "crop                     open Crop dialog",
+            "mosaic / mozaika         stitch many frames into one image",
             "levels                   open Levels window",
             "menu                     open Menu dialog",
             "curves / lut             open Curves (LUT) window",
+            "ghs                      open GHS Stretch dialog",
             "curves reset             reset the Curves LUT",
             "histogram                open Histogram window",
             "correction               open correction panels",
@@ -14227,7 +15101,7 @@ class AstroApp(QMainWindow):
             if hasattr(self.preferences_dialog, "edit_gemini_api_pref"):
                 self.preferences_dialog.edit_gemini_api_pref.setText(str(getattr(self, "gemini_api_key", "") or ""))
             if hasattr(self.preferences_dialog, "edit_deepsnr_args"):
-                self.preferences_dialog.edit_deepsnr_args.setText(str(getattr(self, "deepsnr_args", "{input}") or "{input}"))
+                self.preferences_dialog.edit_deepsnr_args.setText(normalize_deepsnr_args(getattr(self, "deepsnr_args", DEFAULT_DEEPSNR_ARGS)))
         self.preferences_dialog.refresh_select_paths()
         self.preferences_dialog.refresh_joystick_controls()
         self.preferences_dialog.show()
@@ -14290,6 +15164,14 @@ class AstroApp(QMainWindow):
         self.curves_window.raise_()
         self.curves_window.activateWindow()
         self.log("Curves window opened.")
+
+    def show_ghs_dialog(self):
+        self.ghs_dialog.set_params(self.ghs_params, notify=False)
+        self._begin_dialog_compare(self.ghs_dialog)
+        self.ghs_dialog.show()
+        self.ghs_dialog.raise_()
+        self.ghs_dialog.activateWindow()
+        self.log("GHS dialog opened.")
 
     def apply_gaussian_blur_filter(self):
         if self.magic_img is None:
@@ -14660,9 +15542,11 @@ class AstroApp(QMainWindow):
             ("action_color_calibration", "action_color_calibration", "Color Calibration"),
             ("action_levels", "action_levels", "Levels"),
             ("action_curves", "action_curves", "Curves (LUT)"),
+            ("action_ghs", "action_ghs", "GHS Stretch"),
             ("action_blur", "action_blur", "Gaussian Blur"),
             ("action_rotate", "action_rotate", "Rotate"),
             ("action_crop", "action_crop", "Crop"),
+            ("action_mosaic", "action_mosaic", "Frame Mosaic"),
         ]
         for attr, key, default in action_map:
             action = getattr(self, attr, None)
@@ -14694,10 +15578,12 @@ class AstroApp(QMainWindow):
             ("btn_blur_top", "top_blur", "Blur"),
             ("btn_rotate_top", "top_rotate", "Rotate"),
             ("btn_crop_top", "top_crop", "Crop"),
+            ("btn_mosaic_top", "top_mosaic", "Mosaic"),
             ("btn_corr_top", "top_correction", "Correction"),
             ("btn_calib_top", "top_color_calibration", "Calibration"),
             ("btn_levels_top", "top_levels", "Levels"),
             ("btn_curves_top", "top_curves", "Curves"),
+            ("btn_ghs_top", "top_ghs", "GHS"),
             ("btn_new_layer_top", "top_new_layer", "New Layer"),
             ("btn_delete_layer_top", "top_delete_layer", "Delete Layer"),
             ("btn_adj_levels_top", "top_adj_levels", "Adj Levels"),
@@ -14737,7 +15623,9 @@ class AstroApp(QMainWindow):
             "blur_dialog",
             "plate_solve_dialog",
             "starnet_dialog",
+            "mosaic_dialog",
             "fly3d_dialog",
+            "ghs_dialog",
             "star_shrink_dialog",
         ):
             dialog = getattr(self, dialog_name, None)
@@ -15555,6 +16443,7 @@ class AstroApp(QMainWindow):
             self.log(f"Stopping {name} failed: {exc}", "warning")
 
     def _shutdown_background_workers(self):
+        self._stop_deepsnr_progress_dialog()
         if self.ai_assistant_panel is not None and hasattr(self.ai_assistant_panel, "shutdown_workers"):
             try:
                 self.ai_assistant_panel.shutdown_workers()
@@ -15563,6 +16452,7 @@ class AstroApp(QMainWindow):
 
         self._stop_qthread(getattr(self, "worker", None), "magic worker")
         self._stop_qthread(getattr(self, "starnet_worker", None), "starnet worker")
+        self._stop_qthread(getattr(self, "deepsnr_worker", None), "deepsnr worker")
         self._stop_qthread(getattr(self, "fly3d_worker", None), "3d fly worker")
         self._stop_qthread(getattr(self, "plate_solve_worker", None), "plate solve worker")
 
@@ -15770,6 +16660,9 @@ class AstroApp(QMainWindow):
         self.action_curves = QAction("Curves (LUT)", self)
         self.action_curves.triggered.connect(self.show_curves_window)
 
+        self.action_ghs = QAction("GHS Stretch", self)
+        self.action_ghs.triggered.connect(self.show_ghs_dialog)
+
         self.action_blur = QAction("Gaussian Blur", self)
         self.action_blur.triggered.connect(self.apply_gaussian_blur_filter)
         self.action_blur.setEnabled(False)
@@ -15781,6 +16674,9 @@ class AstroApp(QMainWindow):
         self.action_crop = QAction("Crop", self)
         self.action_crop.triggered.connect(self.crop_image_dialog)
         self.action_crop.setEnabled(False)
+
+        self.action_mosaic = QAction("Frame Mosaic", self)
+        self.action_mosaic.triggered.connect(self.create_mosaic_from_frames)
 
         # SkrĂłty klawiszowe dziaĹ‚ajÄ…ce bez MenuBar
         self.addAction(self.action_undo)
@@ -15833,10 +16729,12 @@ class AstroApp(QMainWindow):
         self.btn_blur_top = _add_top_btn("Blur", action=self.action_blur)
         self.btn_rotate_top = _add_top_btn("Rotate", action=self.action_rotate)
         self.btn_crop_top = _add_top_btn("Crop", action=self.action_crop)
+        self.btn_mosaic_top = _add_top_btn("Mosaic", action=self.action_mosaic)
         self.btn_corr_top = _add_top_btn("Correction", action=self.action_correction)
         self.btn_calib_top = _add_top_btn("Calibration", action=self.action_color_calibration)
         self.btn_levels_top = _add_top_btn("Levels", action=self.action_levels)
         self.btn_curves_top = _add_top_btn("Curves", action=self.action_curves)
+        self.btn_ghs_top = _add_top_btn("GHS", action=self.action_ghs)
 
         top_actions_layout.addSpacing(8)
 
@@ -15867,10 +16765,12 @@ class AstroApp(QMainWindow):
             "btn_blur_top",
             "btn_rotate_top",
             "btn_crop_top",
+            "btn_mosaic_top",
             "btn_corr_top",
             "btn_calib_top",
             "btn_levels_top",
             "btn_curves_top",
+            "btn_ghs_top",
             "btn_new_layer_top",
             "btn_delete_layer_top",
             "btn_adj_levels_top",
@@ -15909,15 +16809,17 @@ class AstroApp(QMainWindow):
             "btn_shrink_top": "shrink.svg",
             "btn_plate_top": "plate.svg",
             "btn_starnet_top": "starnet.svg",
-            "btn_deepsnr_top": "starnet.svg",
+            "btn_deepsnr_top": "deepsnr.svg",
             "btn_3d_fly_top": "fly3d.svg",
             "btn_blur_top": "blur.svg",
             "btn_rotate_top": "rotate.svg",
             "btn_crop_top": "crop.svg",
+            "btn_mosaic_top": "mosaic.svg",
             "btn_corr_top": "correction.svg",
             "btn_calib_top": "correction.svg",
             "btn_levels_top": "levels.svg",
             "btn_curves_top": "curves.svg",
+            "btn_ghs_top": "levels.svg",
             "btn_new_layer_top": "new_layer.svg",
             "btn_delete_layer_top": "delete_layer.svg",
             "btn_adj_levels_top": "levels.svg",
@@ -16110,6 +17012,18 @@ class AstroApp(QMainWindow):
         selected_path = selected_files[0] if selected_files else ""
         return selected_path, dialog.selectedNameFilter()
 
+    def _show_open_files_dialog(self, title: str, name_filter: str, directory: str = ""):
+        if not directory:
+            directory = self._get_default_dialog_directory()
+        dialog = QFileDialog(self, title, directory, name_filter)
+        dialog.setAcceptMode(QFileDialog.AcceptOpen)
+        dialog.setFileMode(QFileDialog.ExistingFiles)
+        dialog.setOptions(get_safe_file_dialog_options())
+        dialog.setViewMode(QFileDialog.Detail)
+        if dialog.exec_() != QDialog.Accepted:
+            return [], dialog.selectedNameFilter()
+        return dialog.selectedFiles(), dialog.selectedNameFilter()
+
     def _show_save_file_dialog(self, title: str, name_filter: str, directory: str = ""):
         if not directory:
             directory = self._get_default_dialog_directory()
@@ -16135,6 +17049,130 @@ class AstroApp(QMainWindow):
             return
 
         self.load_image_from_path(path)
+
+    def create_mosaic_from_frames(self):
+        paths, _ = self._show_open_files_dialog(
+            "Wybierz kadry do mozaiki",
+            "Obrazy (*.png *.jpg *.jpeg *.tif *.tiff *.fits *.fit *.fts);;Wszystkie pliki (*)",
+            "",
+        )
+        paths = [str(path or "").strip() for path in (paths or []) if str(path or "").strip()]
+        if not paths:
+            self.log("Mosaic canceled.", "warning")
+            return
+        if len(paths) < 2:
+            self.log("Mosaic needs at least 2 frames.", "warning")
+            return
+
+        dialog = self._get_mosaic_dialog()
+        if dialog.exec_() != QDialog.Accepted:
+            self.log("Mosaic settings canceled.", "warning")
+            return
+        params = dialog.get_parameters()
+        mode_key = str(params.get("mode") or "auto").strip().lower()
+        sort_by_name = bool(params.get("sort_by_name", True))
+        self.mosaic_mode = mode_key
+        self.mosaic_sort_by_name = sort_by_name
+
+        if sort_by_name:
+            paths = sorted(paths, key=lambda p: os.path.basename(p).lower())
+
+        frames = []
+        invalid_paths = []
+        for path in paths:
+            try:
+                frame = safe_imread(path)
+                frame = normalize_to_uint8_bgr(frame)
+                if frame is None or frame.size == 0:
+                    raise RuntimeError("empty frame")
+                frames.append(frame)
+            except Exception:
+                invalid_paths.append(path)
+
+        if len(frames) < 2:
+            self.log("Mosaic failed: not enough valid frames.", "error")
+            if invalid_paths:
+                preview = ", ".join(os.path.basename(p) for p in invalid_paths[:3])
+                if len(invalid_paths) > 3:
+                    preview += ", ..."
+                self.log(f"Invalid frames: {preview}", "error")
+            return
+
+        mode_defs = {
+            "panorama": [("PANORAMA", getattr(cv2, "Stitcher_PANORAMA", None))],
+            "scans": [("SCANS", getattr(cv2, "Stitcher_SCANS", None))],
+            "auto": [
+                ("PANORAMA", getattr(cv2, "Stitcher_PANORAMA", None)),
+                ("SCANS", getattr(cv2, "Stitcher_SCANS", None)),
+            ],
+        }
+        stitch_modes = mode_defs.get(mode_key, mode_defs["auto"])
+        stitch_modes = [(name, mode) for name, mode in stitch_modes if mode is not None]
+        if not stitch_modes:
+            self.log("Mosaic failed: OpenCV Stitcher mode is not available.", "error")
+            return
+
+        stitch_status = None
+        stitched = None
+        used_mode = None
+
+        for mode_name, mode in stitch_modes:
+            if mode is None:
+                continue
+            try:
+                if hasattr(cv2, "Stitcher_create"):
+                    stitcher = cv2.Stitcher_create(mode)
+                else:
+                    stitcher = cv2.createStitcher(mode == getattr(cv2, "Stitcher_SCANS", 1))
+            except Exception:
+                continue
+
+            status, candidate = stitcher.stitch(frames)
+            stitch_status = int(status)
+            if stitch_status == int(getattr(cv2, "Stitcher_OK", 0)) and isinstance(candidate, np.ndarray):
+                stitched = candidate
+                used_mode = mode_name
+                break
+
+        if stitched is None:
+            status_map = {
+                int(getattr(cv2, "Stitcher_OK", 0)): "OK",
+                int(getattr(cv2, "Stitcher_ERR_NEED_MORE_IMGS", 1)): "Need more overlap",
+                int(getattr(cv2, "Stitcher_ERR_HOMOGRAPHY_EST_FAIL", 2)): "Homography failed",
+                int(getattr(cv2, "Stitcher_ERR_CAMERA_PARAMS_ADJUST_FAIL", 3)): "Camera params adjust failed",
+            }
+            status_text = status_map.get(stitch_status, str(stitch_status))
+            self.log(f"Mosaic failed (status: {status_text}).", "error")
+            return
+
+        stitched = normalize_to_uint8_bgr(stitched)
+        if stitched is None or stitched.size == 0:
+            self.log("Mosaic failed: output image is empty.", "error")
+            return
+
+        self.magic_img = stitched
+        self.original_img = stitched.copy()
+        self.processed_img = stitched.copy()
+        self.current_image_path = ""
+        self.current_save_path = None
+        self.latest_image_analysis = {}
+        self.analysis_dirty = True
+
+        if hasattr(self, "undo_stack"):
+            self.undo_stack.clear()
+        if hasattr(self, "redo_stack"):
+            self.redo_stack.clear()
+        if hasattr(self, "processing_history"):
+            self.processing_history.clear()
+        self.thumbnail_next_id = 1
+        self.selected_thumbnail_index = -1
+        self.current_history_node_id = None
+
+        self.viewer.set_before(np_to_qpixmap(self.processed_img))
+        self.update_menu_actions()
+        self.apply_full_processing()
+        self.add_thumbnail(f"Mosaic ({len(frames)} frames)", self.processed_img)
+        self.log(f"Mosaic ready: {len(frames)} frames stitched ({used_mode}).", "success")
 
     def _handle_dropped_images(self, paths):
         if not paths:
@@ -16265,6 +17303,7 @@ class AstroApp(QMainWindow):
 
         params = dialog.get_parameters()
         self.starnet_stride = params["stride"]
+        self.starnet_generate_starmask = bool(params.get("generate_starmask", False))
         save_config(
             self.denoise_model_path,
             self.bg_removal_model_path,
@@ -17424,6 +18463,57 @@ class AstroApp(QMainWindow):
         blended = base_img.astype(np.float32) * (1.0 - alpha3) + layer.astype(np.float32) * alpha3
         return np.clip(blended, 0, 255).astype(np.uint8)
 
+    def _build_starmask_from_starless(self, original_bgr: np.ndarray, starless_bgr: np.ndarray) -> np.ndarray:
+        if not isinstance(original_bgr, np.ndarray) or not isinstance(starless_bgr, np.ndarray):
+            return None
+
+        original_u8 = normalize_to_uint8_bgr(original_bgr)
+        starless_u8 = normalize_to_uint8_bgr(starless_bgr)
+        if original_u8 is None or starless_u8 is None:
+            return None
+
+        if original_u8.shape[:2] != starless_u8.shape[:2]:
+            starless_u8 = cv2.resize(starless_u8, (original_u8.shape[1], original_u8.shape[0]), interpolation=cv2.INTER_AREA)
+
+        diff = cv2.subtract(original_u8, starless_u8)
+        mask_gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+        if mask_gray.size == 0:
+            return mask_gray
+
+        mask_gray = cv2.GaussianBlur(mask_gray, (0, 0), 0.8)
+        mask_gray = np.where(mask_gray > 3, mask_gray, 0).astype(np.uint8)
+        if int(np.max(mask_gray)) > 0:
+            mask_gray = cv2.normalize(mask_gray, None, 0, 255, cv2.NORM_MINMAX)
+        return mask_gray
+
+    def _auto_starless_output_path(self) -> str:
+        target_dir = self._get_default_dialog_directory() if hasattr(self, "_get_default_dialog_directory") else os.path.expanduser("~")
+        source_path = str(getattr(self, "current_image_path", "") or getattr(self, "current_save_path", "") or "").strip()
+        if source_path:
+            source_obj = Path(source_path)
+            if str(source_obj.parent):
+                target_dir = str(source_obj.parent)
+            stem = source_obj.stem or "image"
+        else:
+            stem = datetime.now().strftime("image_%Y%m%d_%H%M%S")
+
+        if stem.lower().endswith("_starless"):
+            return os.path.join(target_dir, f"{stem}.tif")
+        return os.path.join(target_dir, f"{stem}_starless.tif")
+
+    def _auto_starmask_output_path(self, starless_path: str = "") -> str:
+        starless_candidate = str(starless_path or "").strip()
+        if starless_candidate:
+            starless_obj = Path(starless_candidate)
+            stem = starless_obj.stem or "image"
+            if stem.lower().endswith("_starless"):
+                stem = stem[:-9]
+            return str(starless_obj.with_name(f"{stem}_starmask.tif"))
+
+        target_dir = self._get_default_dialog_directory() if hasattr(self, "_get_default_dialog_directory") else os.path.expanduser("~")
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return os.path.join(target_dir, f"starmask_{stamp}.tif")
+
     def on_magic_finished(self, result):
         if hasattr(self, "progress_dialog") and self.progress_dialog is not None:
             self.progress_dialog.close()
@@ -17447,8 +18537,10 @@ class AstroApp(QMainWindow):
         if result is None:
             self.log("StarNet++ failed: empty result.", "error")
             return
+        source_before_starnet = None
         if hasattr(self, "starnet_source_img") and self.starnet_source_img is not None:
-            self.undo_stack.append(self.starnet_source_img.copy())
+            source_before_starnet = self.starnet_source_img.copy()
+            self.undo_stack.append(source_before_starnet.copy())
             self.starnet_source_img = None
         self.redo_stack.clear()
         self.magic_img = result
@@ -17458,6 +18550,32 @@ class AstroApp(QMainWindow):
         self.apply_full_processing()
         self.add_thumbnail("StarNet++", self.processed_img)
         self.update_menu_actions()
+
+        if bool(getattr(self, "starnet_generate_starmask", False)) and isinstance(source_before_starnet, np.ndarray):
+            starmask_u8 = self._build_starmask_from_starless(source_before_starnet, self.magic_img)
+            if isinstance(starmask_u8, np.ndarray) and starmask_u8.size > 0 and int(np.count_nonzero(starmask_u8)) > 0:
+                starless_u8 = normalize_to_uint8_bgr(self.magic_img)
+                starless_path = self._auto_starless_output_path()
+                try:
+                    os.makedirs(os.path.dirname(starless_path) or ".", exist_ok=True)
+                except Exception:
+                    pass
+
+                saved_starless = isinstance(starless_u8, np.ndarray) and cv2.imwrite(starless_path, starless_u8)
+                if saved_starless:
+                    self.log(f"Starless saved: {starless_path}", "success")
+                else:
+                    self.log("Starless save failed: could not write TIFF output file.", "warning")
+
+                mask_path = self._auto_starmask_output_path(starless_path)
+                saved_mask = cv2.imwrite(mask_path, starmask_u8)
+                if saved_mask:
+                    self.log(f"StarMask generated: {mask_path}", "success")
+                else:
+                    self.log("StarMask generation failed: could not write TIFF output file.", "warning")
+            else:
+                self.log("StarMask generation skipped: empty mask.", "warning")
+
         self.log("StarNet++ finished. Starless image applied.", "success")
 
     def on_params_changed(self):
@@ -17837,6 +18955,10 @@ class AstroApp(QMainWindow):
 
     def update_menu_actions(self):
         has_img = self.original_img is not None
+        has_any_image = any(
+            isinstance(getattr(self, attr, None), np.ndarray)
+            for attr in ("original_img", "magic_img", "processed_img")
+        )
         if hasattr(self, "action_save"):
             self.action_save.setEnabled(self.processed_img is not None)
         if hasattr(self, "action_save_as"):
@@ -17846,7 +18968,6 @@ class AstroApp(QMainWindow):
             "action_star_shrink",
             "action_plate_solve",
             "action_starnet",
-            "action_deepsnr",
             "action_3d_fly",
             "action_color_calibration",
             "action_blur",
@@ -17857,6 +18978,8 @@ class AstroApp(QMainWindow):
             action = getattr(self, action_name, None)
             if action is not None:
                 action.setEnabled(has_img)
+        if hasattr(self, "action_deepsnr"):
+            self.action_deepsnr.setEnabled(has_any_image)
         if hasattr(self, "action_delete_layer"):
             self.action_delete_layer.setEnabled(self.can_delete_layer(getattr(self, "selected_layer_key", None)))
         if hasattr(self, "action_undo"):
