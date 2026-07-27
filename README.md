@@ -2,7 +2,21 @@
 
 Desktop astrophotography processing application built with Python (PyQt5 + OpenCV + NumPy).
 
-The project combines classic editing tools (Levels, Curves, Histogram, Blur, Crop, Rotate) with astronomy-specific features: star analysis (FWHM/SNR), plate solving, star removal (StarNet++), denoise (deepSNR), frame mosaics, and the 3D FLY animation filter.
+## Multilingual README
+
+- Polski: `README.pl.md`
+- English: `README.en.md`
+- Espanol: `README.es.md`
+- Deutsch: `README.de.md`
+- Francais: `README.fr.md`
+- Italiano: `README.it.md`
+- Portugues: `README.pt.md`
+- Nederlands: `README.nl.md`
+- Cesky: `README.cs.md`
+- Turkce: `README.tr.md`
+- Ukrainska: `README.uk.md`
+- Russkiy: `README.ru.md`
+- Nihongo: `README.ja.md`
 
 ## Key features
 
@@ -15,9 +29,11 @@ The project combines classic editing tools (Levels, Curves, Histogram, Blur, Cro
   - StarNet++ star removal,
   - deepSNR external denoise,
   - frame mosaic stitching,
+  - frame stacking with file list, Bayer pattern selection, and CFA-safe debayer,
+  - animated stacking progress dialog with per-stage process visualization,
   - 3D FLY clip rendering (optional audio).
+- AutoStretch tuned to a softer, PixInsight AutoSTF-like response.
 - Altair AI assistant (Gemini) and optional speech input.
-- PL/EN UI with configurable preferences and workspaces.
 
 ## Requirements
 
@@ -59,48 +75,3 @@ Example fields:
 - language, theme, core count, workspace.
 
 Security note: config may contain API keys. Do not publish it in public repositories.
-
-## Quick workflow
-
-1. Open an image (`Open`) or drag-and-drop a file.
-2. Apply base corrections (Levels/Curves/Histogram/Correction).
-3. Run `Analyze` to compute metrics (FWHM, SNR).
-4. Optional: `StarNet++`, `deepSNR`, `Mosaic`, `Plate Solve`.
-5. For animation, run `3D FLY`.
-6. Save output (`Save` / `Save As`).
-
-## 3D FLY quick guide
-
-1. Stage 1 `remove stars` (optional): run StarNet++.
-2. Stage 2 `mark sections`: cut layer zones (`Cut`) or use `Load layers`.
-3. Stage 3 `edge smoothing`: select a layer, set blur, click `Apply`.
-4. Stage 4 `clip setup`: set duration and FPS.
-5. Stage 5/6 `motion and position`: set direction, speed, and zoom per layer.
-6. Final stage `add music`: choose audio and click `Render 3D FLY`.
-
-Common issues:
-
-- `No layers for motion` -> add layers in stage 2.
-- Blur not visible -> in stage 3 select layer and click `Apply`.
-- No render output -> open the final tab and set a valid output path.
-
-## Useful in-app console commands
-
-- `help`
-- `open [path]`
-- `save` / `save as [path]`
-- `magic`
-- `starnet++`
-- `deepsnr`
-- `3d fly`
-- `analyze`
-- `mosaic`
-- `levels`, `curves`, `histogram`, `ghs`
-
-## Project structure
-
-- `Astro Ai Plus.py` - main app file.
-- `deep_sky_catalog.py` - offline deep-sky object catalog.
-- `3d_fly_help.md` - detailed 3D FLY manual.
-- `requirements.txt` - Python dependencies.
-- `assets/` - UI icons and resources.
