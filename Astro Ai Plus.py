@@ -563,6 +563,7 @@ I18N = {
     "action_rotate": {"pl": "Obrót", "en": "Rotate"},
     "action_crop": {"pl": "Kadruj", "en": "Crop"},
     "action_mosaic": {"pl": "Mozaika kadrów", "en": "Frame Mosaic"},
+    "action_stack": {"pl": "Stackowanie kadrów", "en": "Frame Stack"},
     "top_open": {"pl": "Otwórz", "en": "Open"},
     "top_save": {"pl": "Zapisz", "en": "Save"},
     "top_save_as": {"pl": "Zapisz jako", "en": "Save As"},
@@ -585,6 +586,7 @@ I18N = {
     "top_rotate": {"pl": "Obrót", "en": "Rotate"},
     "top_crop": {"pl": "Kadr", "en": "Crop"},
     "top_mosaic": {"pl": "Mozaika", "en": "Mosaic"},
+    "top_stack_frames": {"pl": "Stack", "en": "Stack"},
     "top_correction": {"pl": "Korekcja", "en": "Correction"},
     "top_color_calibration": {"pl": "Kalibracja", "en": "Calibration"},
     "top_levels": {"pl": "Poziomy", "en": "Levels"},
@@ -642,6 +644,8 @@ AUTO_TEXT_MAP = {
     "Star Shrink": {"pl": "Zmniejsz gwiazdy", "en": "Star Shrink"},
     "Plate Solving": {"pl": "Plate Solving", "en": "Plate Solving"},
     "Run StarNet++": {"pl": "Uruchom StarNet++", "en": "Run StarNet++"},
+    "Frame Stack": {"pl": "Stackowanie kadrów", "en": "Frame Stack"},
+    "Stack": {"pl": "Stack", "en": "Stack"},
     "3D FLY Filter": {"pl": "Filtr 3D FLY", "en": "3D FLY Filter"},
     "Gaussian Blur": {"pl": "Rozmycie Gaussa", "en": "Gaussian Blur"},
     "Rotate": {"pl": "Obrót", "en": "Rotate"},
@@ -1130,29 +1134,25 @@ class CircularProgressBar(QWidget):
         side = max(10, min(self.width(), self.height()) - 4)
         x0 = (self.width() - side) / 2.0
         y0 = (self.height() - side) / 2.0
-        arc_rect = QRectF(x0, y0, side, side)
-        ring_width = max(6.0, side * 0.2)
+        ring_width = 1.0
+        half_width = ring_width / 2.0
+        arc_rect = QRectF(
+            x0 + half_width,
+            y0 + half_width,
+            max(1.0, side - ring_width),
+            max(1.0, side - ring_width),
+        )
 
-        track_pen = QPen(QColor("#ffffff"), ring_width)
+        track_pen = QPen(QColor("#ffffff"))
+        track_pen.setWidthF(ring_width)
+        track_pen.setCosmetic(True)
         track_pen.setCapStyle(Qt.FlatCap)
         painter.setPen(track_pen)
         painter.drawArc(arc_rect, 0, 360 * 16)
 
-        painter.setPen(QPen(QColor("#000000"), 2))
-        painter.setBrush(Qt.NoBrush)
-        painter.drawEllipse(arc_rect)
-
-        inner_offset = ring_width / 2.0
-        inner_rect = QRectF(
-            arc_rect.left() + inner_offset,
-            arc_rect.top() + inner_offset,
-            max(1.0, arc_rect.width() - ring_width),
-            max(1.0, arc_rect.height() - ring_width),
-        )
-        painter.setBrush(QColor("#ffffff"))
-        painter.drawEllipse(inner_rect)
-
-        progress_pen = QPen(QColor("#1bff00"), max(3.0, ring_width - 2.0))
+        progress_pen = QPen(QColor("#1bff00"))
+        progress_pen.setWidthF(ring_width)
+        progress_pen.setCosmetic(True)
         progress_pen.setCapStyle(Qt.RoundCap)
         painter.setPen(progress_pen)
 
@@ -1181,7 +1181,7 @@ class CircularProgressBar(QWidget):
             font.setPointSize(max(9, int(side * 0.24)))
             font.setBold(False)
             painter.setFont(font)
-            painter.drawText(inner_rect, Qt.AlignCenter, text)
+            painter.drawText(arc_rect, Qt.AlignCenter, text)
 
 
 class PlateSolvingDialog(QDialog):
@@ -2193,6 +2193,94 @@ class MosaicDialog(QDialog):
         }
 
 
+class StackDialog(QDialog):
+    def __init__(self, parent=None, method: str = "median", align_frames: bool = True, use_calibration: bool = False):
+        super().__init__(parent)
+        apply_dialog_window_flags(self)
+        self.setWindowTitle("Frame Stacking")
+        self.setMinimumWidth(460)
+
+        layout = QVBoxLayout(self)
+        apply_standard_layout_margins(layout)
+
+        self.lbl_info = QLabel("Configure frame stacking and optional calibration frames.")
+        self.lbl_info.setWordWrap(True)
+        layout.addWidget(self.lbl_info)
+
+        tabs = QTabWidget()
+        layout.addWidget(tabs)
+
+        stack_tab = QWidget()
+        stack_layout = QGridLayout(stack_tab)
+        stack_layout.setContentsMargins(12, 12, 12, 12)
+        stack_layout.setHorizontalSpacing(10)
+        stack_layout.setVerticalSpacing(10)
+
+        stack_layout.addWidget(QLabel("Stack method:"), 0, 0)
+        self.combo_method = QComboBox()
+        self.combo_method.addItem("Median", "median")
+        self.combo_method.addItem("Average", "average")
+        stack_layout.addWidget(self.combo_method, 0, 1)
+
+        self.check_align = QCheckBox("Align frames before stacking")
+        stack_layout.addWidget(self.check_align, 1, 0, 1, 2)
+
+        self.lbl_hint = QLabel("Tip: median rejects outliers better, average can preserve faint signal.")
+        self.lbl_hint.setWordWrap(True)
+        stack_layout.addWidget(self.lbl_hint, 2, 0, 1, 2)
+
+        tabs.addTab(stack_tab, "Stack")
+
+        calib_tab = QWidget()
+        calib_layout = QVBoxLayout(calib_tab)
+        calib_layout.setContentsMargins(12, 12, 12, 12)
+        calib_layout.setSpacing(10)
+
+        self.check_use_calibration = QCheckBox("Use calibration frames (bias, dark, flat)")
+        calib_layout.addWidget(self.check_use_calibration)
+
+        self.lbl_calib_hint = QLabel(
+            "After pressing Run, you can select BIAS, DARK and FLAT files. "
+            "Any group can be skipped."
+        )
+        self.lbl_calib_hint.setWordWrap(True)
+        calib_layout.addWidget(self.lbl_calib_hint)
+        calib_layout.addStretch(1)
+
+        tabs.addTab(calib_tab, "Calibration")
+
+        button_layout = QHBoxLayout()
+        self.btn_run = QPushButton("Run")
+        self.btn_run.setProperty("accent", True)
+        self.btn_cancel = QPushButton("Cancel")
+        button_layout.addWidget(self.btn_run)
+        button_layout.addWidget(self.btn_cancel)
+        layout.addLayout(button_layout)
+
+        self.btn_run.clicked.connect(self.accept)
+        self.btn_cancel.clicked.connect(self.reject)
+
+        self.set_parameters(method=method, align_frames=align_frames, use_calibration=use_calibration)
+
+    def set_parameters(self, method: str = "median", align_frames: bool = True, use_calibration: bool = False):
+        wanted = str(method or "median").strip().lower()
+        idx = 0
+        for i in range(self.combo_method.count()):
+            if str(self.combo_method.itemData(i) or "").strip().lower() == wanted:
+                idx = i
+                break
+        self.combo_method.setCurrentIndex(idx)
+        self.check_align.setChecked(bool(align_frames))
+        self.check_use_calibration.setChecked(bool(use_calibration))
+
+    def get_parameters(self):
+        return {
+            "method": str(self.combo_method.currentData() or "median"),
+            "align_frames": bool(self.check_align.isChecked()),
+            "use_calibration": bool(self.check_use_calibration.isChecked()),
+        }
+
+
 class FlyZoneBrushWidget(QWidget):
     maskChanged = pyqtSignal()
 
@@ -2276,6 +2364,25 @@ class FlyZoneBrushWidget(QWidget):
         self.setMaximumSize(scaled_w, scaled_h)
         self.resize(scaled_w, scaled_h)
 
+    def set_zoom_factor(self, zoom_factor: float):
+        new_zoom = float(np.clip(float(zoom_factor), self.zoom_min, self.zoom_max))
+        if abs(new_zoom - float(self.zoom_factor)) < 1e-6:
+            return
+        self.zoom_factor = new_zoom
+        self._update_widget_size()
+        self.update()
+
+    def multiply_zoom(self, factor: float):
+        self.set_zoom_factor(float(self.zoom_factor) * float(factor))
+
+    def fit_zoom_to_viewport(self, viewport_size: QSize):
+        if viewport_size is None:
+            return
+        vw = max(1, int(viewport_size.width()))
+        vh = max(1, int(viewport_size.height()))
+        fit_factor = min(float(vw) / max(1.0, float(self._base_w)), float(vh) / max(1.0, float(self._base_h)))
+        self.set_zoom_factor(fit_factor)
+
     def _advance_ants(self):
         self.ants_phase = (self.ants_phase + 1.0) % 8.0
         if np.any(self.zone_map >= 0):
@@ -2296,9 +2403,7 @@ class FlyZoneBrushWidget(QWidget):
         if delta == 0:
             return super().wheelEvent(event)
         factor = 1.15 if delta > 0 else (1.0 / 1.15)
-        self.zoom_factor = float(np.clip(self.zoom_factor * factor, self.zoom_min, self.zoom_max))
-        self._update_widget_size()
-        self.update()
+        self.multiply_zoom(factor)
         event.accept()
 
     def mousePressEvent(self, event):
@@ -2518,13 +2623,10 @@ class Fly3DDialog(QDialog):
             "7 dodaj muzyke",
         ]
 
-        top_container = QWidget()
-        top_container_layout = QVBoxLayout(top_container)
-        top_container_layout.setContentsMargins(0, 0, 0, 0)
-
-        stage_shell = QHBoxLayout()
-        stage_shell.setContentsMargins(0, 0, 0, 0)
-        stage_shell.setSpacing(0)
+        self.left_panel = QWidget()
+        left_panel_layout = QVBoxLayout(self.left_panel)
+        left_panel_layout.setContentsMargins(0, 0, 0, 0)
+        left_panel_layout.setSpacing(8)
         self.stage_nav = QListWidget()
         self.stage_nav.setMinimumWidth(0)
         self.stage_nav.setMaximumWidth(420)
@@ -2546,22 +2648,22 @@ class Fly3DDialog(QDialog):
         self.stage_stack = QStackedWidget()
         self.stage_stack.setStyleSheet("QStackedWidget { border: 1px solid #3b4c5d; }")
 
+        left_panel_layout.addWidget(self.stage_nav, 1)
+
         self.left_splitter = QSplitter(Qt.Horizontal)
-        self.left_splitter.addWidget(self.stage_nav)
+        self.left_splitter.addWidget(self.left_panel)
         self.left_splitter.addWidget(self.stage_stack)
         self.left_splitter.setChildrenCollapsible(True)
         self.left_splitter.setStretchFactor(0, 0)
         self.left_splitter.setStretchFactor(1, 1)
         self.left_splitter.setCollapsible(0, True)
         self.left_splitter.setCollapsible(1, True)
-        self.left_splitter.setSizes([260, 900])
-        stage_shell.addWidget(self.left_splitter)
-        top_container_layout.addLayout(stage_shell)
+        self.left_splitter.setSizes([320, 900])
 
-        self.bottom_panel = QWidget()
-        bottom_panel_layout = QVBoxLayout(self.bottom_panel)
-        bottom_panel_layout.setContentsMargins(6, 6, 6, 6)
-        bottom_panel_layout.setSpacing(6)
+        self.side_panel = QWidget()
+        side_panel_layout = QVBoxLayout(self.side_panel)
+        side_panel_layout.setContentsMargins(6, 6, 6, 6)
+        side_panel_layout.setSpacing(6)
         self.stage_nav.currentRowChanged.connect(self._on_stage_tab_changed)
 
         # Etap 1: usun gwiazdy
@@ -2627,8 +2729,22 @@ class Fly3DDialog(QDialog):
         self.zone_widget.set_active_zone(self.current_zone_index)
         self.zone_scroll = QScrollArea()
         self.zone_scroll.setWidgetResizable(False)
+        self.zone_scroll.setAlignment(Qt.AlignCenter)
         self.zone_scroll.setWidget(self.zone_widget)
         stage1_layout.addWidget(self.zone_scroll, 1)
+
+        zoom_row = QHBoxLayout()
+        self.btn_zone_zoom_out = QPushButton("Pomniejsz -")
+        self.btn_zone_zoom_out.clicked.connect(self._on_zone_zoom_out)
+        zoom_row.addWidget(self.btn_zone_zoom_out)
+        self.btn_zone_zoom_in = QPushButton("Powieksz +")
+        self.btn_zone_zoom_in.clicked.connect(self._on_zone_zoom_in)
+        zoom_row.addWidget(self.btn_zone_zoom_in)
+        self.btn_zone_fit = QPushButton("Dopasuj do okna")
+        self.btn_zone_fit.clicked.connect(self._on_zone_zoom_fit)
+        zoom_row.addWidget(self.btn_zone_fit)
+        zoom_row.addStretch(1)
+        stage1_layout.addLayout(zoom_row)
 
         zone_row = QHBoxLayout()
         zone_row.addStretch(1)
@@ -3008,8 +3124,26 @@ class Fly3DDialog(QDialog):
         self.action_cut_selection.triggered.connect(self._perform_cut_selection)
         self.addAction(self.action_cut_selection)
 
+        self.action_zone_zoom_in = QAction("Zone zoom in", self)
+        self.action_zone_zoom_in.setShortcuts(["+", "="])
+        self.action_zone_zoom_in.setShortcutContext(Qt.WindowShortcut)
+        self.action_zone_zoom_in.triggered.connect(self._on_zone_zoom_in)
+        self.addAction(self.action_zone_zoom_in)
+
+        self.action_zone_zoom_out = QAction("Zone zoom out", self)
+        self.action_zone_zoom_out.setShortcuts(["-", "_"])
+        self.action_zone_zoom_out.setShortcutContext(Qt.WindowShortcut)
+        self.action_zone_zoom_out.triggered.connect(self._on_zone_zoom_out)
+        self.addAction(self.action_zone_zoom_out)
+
+        self.action_zone_zoom_fit = QAction("Zone zoom fit", self)
+        self.action_zone_zoom_fit.setShortcut("0")
+        self.action_zone_zoom_fit.setShortcutContext(Qt.WindowShortcut)
+        self.action_zone_zoom_fit.triggered.connect(self._on_zone_zoom_fit)
+        self.addAction(self.action_zone_zoom_fit)
+
         self.cuts_label = QLabel("Wycięte sekcje (PNG):")
-        bottom_panel_layout.addWidget(self.cuts_label)
+        side_panel_layout.addWidget(self.cuts_label)
         self.cut_scroll = QScrollArea()
         self.cut_scroll.setWidgetResizable(True)
         self.cut_scroll.setMinimumHeight(140)
@@ -3019,7 +3153,7 @@ class Fly3DDialog(QDialog):
         self.cut_layout.setSpacing(8)
         self.cut_layout.addStretch(1)
         self.cut_scroll.setWidget(self.cut_container)
-        bottom_panel_layout.addWidget(self.cut_scroll, 1)
+        side_panel_layout.addWidget(self.cut_scroll, 1)
 
         buttons = QVBoxLayout()
         self.btn_run = QPushButton("Renderuj 3D FLY")
@@ -3029,18 +3163,9 @@ class Fly3DDialog(QDialog):
         buttons.addWidget(self.btn_run)
         buttons.addWidget(self.btn_cancel)
         buttons.addStretch(1)
-        bottom_panel_layout.addLayout(buttons)
-
-        self.bottom_splitter = QSplitter(Qt.Vertical)
-        self.bottom_splitter.addWidget(top_container)
-        self.bottom_splitter.addWidget(self.bottom_panel)
-        self.bottom_splitter.setChildrenCollapsible(True)
-        self.bottom_splitter.setStretchFactor(0, 1)
-        self.bottom_splitter.setStretchFactor(1, 0)
-        self.bottom_splitter.setCollapsible(0, True)
-        self.bottom_splitter.setCollapsible(1, True)
-        self.bottom_splitter.setSizes([760, 120])
-        root.addWidget(self.bottom_splitter, 1)
+        side_panel_layout.addLayout(buttons)
+        left_panel_layout.addWidget(self.side_panel, 0)
+        root.addWidget(self.left_splitter, 1)
 
         self._sync_brush()
         self._refresh_motion_layers(keep_selection=False)
@@ -3372,6 +3497,28 @@ class Fly3DDialog(QDialog):
             float(self.spin_tolerance.value()),
             float(self.spin_aggressiveness.value()),
         )
+
+    def _on_zone_zoom_in(self):
+        if hasattr(self, "stage_stack") and int(self.stage_stack.currentIndex()) != 1:
+            return
+        if hasattr(self, "zone_widget"):
+            self.zone_widget.multiply_zoom(1.15)
+
+    def _on_zone_zoom_out(self):
+        if hasattr(self, "stage_stack") and int(self.stage_stack.currentIndex()) != 1:
+            return
+        if hasattr(self, "zone_widget"):
+            self.zone_widget.multiply_zoom(1.0 / 1.15)
+
+    def _on_zone_zoom_fit(self):
+        if hasattr(self, "stage_stack") and int(self.stage_stack.currentIndex()) != 1:
+            return
+        if not hasattr(self, "zone_widget") or not hasattr(self, "zone_scroll"):
+            return
+        viewport = self.zone_scroll.viewport() if self.zone_scroll is not None else None
+        if viewport is None:
+            return
+        self.zone_widget.fit_zoom_to_viewport(viewport.size())
 
     def _update_starless_preview(self):
         if not hasattr(self, "starless_preview_label"):
@@ -5669,6 +5816,7 @@ class AIAssistantPanel(QFrame):
             "open.menu": "open.menu",
             "run.magic": "run.magic",
             "run.mosaic": "mosaic",
+            "run.stack": "stack",
             "run.starnet": "run.starnet",
             "run.starnet++": "run.starnet++",
             "run.deepsnr": "run.deepsnr",
@@ -5754,6 +5902,8 @@ class AIAssistantPanel(QFrame):
             commands.append("Run.Magic()")
         if "mosaic" in text or "mozaik" in text or "stitch" in text:
             commands.append("Run.Mosaic()")
+        if "stack" in text or "stacking" in text or "stackowanie" in text:
+            commands.append("Run.Stack()")
         if "star" in text and ("remove" in text or "removal" in text or "starnet" in text):
             commands.append("Run.StarNet()")
         if "deepsnr" in text or "deep snr" in text:
@@ -5799,13 +5949,13 @@ class AIAssistantPanel(QFrame):
     def validate_ase_code(self, code: str) -> tuple[bool, str]:
         allowed_commands = {
             "open.curves", "open.levels", "open.histogram", "open.correction", "open.ghs", "open.calibration",
-            "open.console", "open.menu", "run.magic", "run.mosaic", "run.starnet", "run.starnet++", "run.deepsnr",
+            "open.console", "open.menu", "run.magic", "run.mosaic", "run.stack", "run.starnet", "run.starnet++", "run.deepsnr",
             "open.blur", "save", "saveas", "undo", "redo", "platesolve",
             "solveplate", "blur", "gaussianblur", "gaussian", "levels", "level",
             "menu", "console", "curves", "curve", "lut", "curveslut",
             "curvesreset", "lutreset", "histogram", "hist", "correction", "correct", "ghs", "ghsstretch", "calibration", "bn", "backgroundneutralization",
             "cameraraw", "reset", "resetsliders", "darkon", "darkoff", "models", "deepsnr",
-            "mosaic", "exit", "quit", "help"
+            "mosaic", "stack", "exit", "quit", "help"
         }
         for raw_line in code.splitlines():
             line = raw_line.strip()
@@ -5846,7 +5996,7 @@ class AIAssistantPanel(QFrame):
             "analysis_metrics": analysis_metrics,
             "available_ase_commands": [
                 "Open.Curves()", "Open.Levels()", "Open.Histogram()", "Open.Correction()",
-                "Open.Console()", "Open.Menu()", "Run.Magic()", "Run.StarNet()", "Run.StarNet++()", "Run.DeepSNR()",
+                "Open.Console()", "Open.Menu()", "Run.Magic()", "Run.Mosaic()", "Run.Stack()", "Run.StarNet()", "Run.StarNet++()", "Run.DeepSNR()",
                 "Open.Blur()", "Save()", "SaveAs(\"output.tif\")", "Undo()", "Redo()", "PlateSolve()",
                 "DarkOn()", "DarkOff()", "Models()", "Exit()", "Quit()", "Help()",
                 "Reset()", "ResetSliders()", "CurvesReset()", "LutReset()"
@@ -9095,10 +9245,18 @@ class HistogramWidget(QFrame):
         self._view_center = 127.5
         self._panning = False
         self._last_pan_x = 0
+        self._image_bgr = None
 
     def set_image(self, img):
         if img is None:
             return
+
+        if img.ndim == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        elif img.ndim == 3 and img.shape[2] > 3:
+            img = img[:, :, :3]
+
+        self._image_bgr = img.copy()
 
         b, g, r = cv2.split(img)
 
@@ -9107,6 +9265,40 @@ class HistogramWidget(QFrame):
         self.hist_b = cv2.calcHist([b], [0], None, [256], [0, 256]).flatten()
 
         self.update()
+
+    def get_selected_statistics(self, use_r=True, use_g=True, use_b=True):
+        if self._image_bgr is None or self._image_bgr.size == 0:
+            return None
+
+        selected = []
+        if use_b:
+            selected.append(0)
+        if use_g:
+            selected.append(1)
+        if use_r:
+            selected.append(2)
+
+        if not selected:
+            return None
+
+        selected_data = self._image_bgr[:, :, selected].astype(np.float32)
+        if selected_data.ndim == 2:
+            adu_data = selected_data
+        elif selected_data.shape[2] == 1:
+            adu_data = selected_data[:, :, 0]
+        else:
+            adu_data = np.mean(selected_data, axis=2, dtype=np.float32)
+
+        return {
+            "avg": float(np.mean(adu_data)),
+            "mean": float(np.mean(adu_data)),
+            "median": float(np.median(adu_data)),
+            "std": float(np.std(adu_data)),
+            "min": float(np.min(adu_data)),
+            "max": float(np.max(adu_data)),
+            "p01": float(np.percentile(adu_data, 1.0)),
+            "p99": float(np.percentile(adu_data, 99.0)),
+        }
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -11189,10 +11381,14 @@ class HistogramWindow(QDialog):
         self.histogram_widget = HistogramWidget()
         layout.addWidget(self.histogram_widget)
 
+        self.lbl_stats = QLabel("Statystyki (ADU): brak danych")
+        self.lbl_stats.setWordWrap(True)
+        layout.addWidget(self.lbl_stats)
+
         # ---------- poĹ‚Ä…czenia ----------
-        self.check_r.stateChanged.connect(lambda _state: self.histogram_widget.update())
-        self.check_g.stateChanged.connect(lambda _state: self.histogram_widget.update())
-        self.check_b.stateChanged.connect(lambda _state: self.histogram_widget.update())
+        self.check_r.stateChanged.connect(self._on_channel_visibility_changed)
+        self.check_g.stateChanged.connect(self._on_channel_visibility_changed)
+        self.check_b.stateChanged.connect(self._on_channel_visibility_changed)
 
         self.histogram_widget.check_r = self.check_r
         self.histogram_widget.check_g = self.check_g
@@ -11208,6 +11404,7 @@ class HistogramWindow(QDialog):
 
     def set_image(self, img):
         self.histogram_widget.set_image(img)
+        self._refresh_statistics_label()
 
     def _update_zoom_label(self, zoom_value, _center_value):
         self.lbl_zoom.setText(f"{float(zoom_value):.2f}x")
@@ -11232,6 +11429,26 @@ class HistogramWindow(QDialog):
     def _on_sync_zoom_changed(self, _enabled):
         self.zoomSyncChanged.emit(self.is_zoom_sync_enabled())
 
+    def _on_channel_visibility_changed(self, _state):
+        self.histogram_widget.update()
+        self._refresh_statistics_label()
+
+    def _refresh_statistics_label(self):
+        stats = self.histogram_widget.get_selected_statistics(
+            use_r=self.check_r.isChecked(),
+            use_g=self.check_g.isChecked(),
+            use_b=self.check_b.isChecked(),
+        )
+        if not stats:
+            self.lbl_stats.setText("Statystyki (ADU): wybierz co najmniej jeden kanał")
+            return
+        self.lbl_stats.setText(
+            "Statystyki (ADU): "
+            f"AVG={stats['avg']:.2f}, mean={stats['mean']:.2f}, median={stats['median']:.2f}, "
+            f"sigma={stats['std']:.2f}, min={stats['min']:.2f}, max={stats['max']:.2f}, "
+            f"p01={stats['p01']:.2f}, p99={stats['p99']:.2f}"
+        )
+
     def is_zoom_sync_enabled(self):
         return self.check_sync_zoom.isChecked()
 
@@ -11250,6 +11467,7 @@ class ConsoleCommandInput(QLineEdit):
         "save as",
         "open",
         "mosaic",
+        "stack",
         "curves",
         "levels",
         "histogram",
@@ -11428,6 +11646,7 @@ class ConsoleWindow(QDialog):
             "open.menu": "menu",
             "run.magic": "magic",
             "run.mosaic": "mosaic",
+            "run.stack": "stack",
             "run.starnet": "starnet++",
             "run.starnet++": "starnet++",
             "run.deepsnr": "deepsnr",
@@ -12569,31 +12788,45 @@ class SingleViewer(QGraphicsView):
             return None
         return (int(round(local_x)), int(round(local_y)))
 
-    def on_viewer_image_clicked(self, x, y):
-     """ObsĹ‚uga klikniÄ™cia na obraz - alternatywa dla PixInsight i Photoshopa"""
-     self.log(f"KlikniÄ™to na obraz w punkcie: X={x}, Y={y}")
+    def _has_pixmap(self) -> bool:
+        if self._pixmap_item is None:
+            return False
+        pix = self._pixmap_item.pixmap()
+        return pix is not None and not pix.isNull()
 
-     # --- FUNKCJA STYL PIXINSIGHT (Dynamic Background Extraction - PrĂłbki tĹ‚a) ---
-     if hasattr(self, 'dbe_mode_active') and self.dbe_mode_active:
-         if not hasattr(self, 'bg_samples'):
-             self.bg_samples = []
-         self.bg_samples.append((x, y))
-         self.log(f"PixInsight DBE: Dodano prĂłbkÄ™ tĹ‚a ({x}, {y}). ĹÄ…cznie prĂłbki: {len(self.bg_samples)}")
-         return
+    def _set_scale_factor_absolute(self, target_scale: float):
+        if not self._has_pixmap():
+            return
+        target = max(0.02, min(64.0, float(target_scale)))
+        current = max(1e-9, float(self.scale_factor))
+        ratio = target / current
+        self.scale(ratio, ratio)
+        self.scale_factor = target
+        self.zoom_changed_signal.emit(self.scale_factor)
 
-     # --- FUNKCJA STYL PHOTOSHOP (Color Picker - PrĂłbnik koloru dla krzywych/warstw) ---
-     if hasattr(self, 'picker_mode_active') and self.picker_mode_active:
-         if self.original_img is not None:
-             try:
-                 # OpenCV przechowuje obrazy w formacie BGR
-                 color_bgr = self.original_img[y, x]
-                 b, g, r = color_bgr[0], color_bgr[1], color_bgr[2]
-                 self.log(f"Photoshop Picker: R={r}, G={g}, B={b}")
-                 # Tutaj program w przyszĹ‚oĹ›ci moĹĽe postawiÄ‡ punkt na wykresie Curves (Krzywe)
-             except IndexError:
-                 pass
-             return
-             
+    def zoom_in(self):
+        self._set_scale_factor_absolute(float(self.scale_factor) * 1.15)
+
+    def zoom_out(self):
+        self._set_scale_factor_absolute(float(self.scale_factor) / 1.15)
+
+    def reset_zoom(self):
+        self._set_scale_factor_absolute(1.0)
+
+    def fit_to_window(self):
+        if not self._has_pixmap():
+            return
+        pix = self._pixmap_item.pixmap()
+        if pix.width() <= 0 or pix.height() <= 0:
+            return
+        viewport_size = self.viewport().size()
+        vw = max(1, int(viewport_size.width()))
+        vh = max(1, int(viewport_size.height()))
+        fit_scale = min(float(vw) / float(pix.width()), float(vh) / float(pix.height()))
+        self._set_scale_factor_absolute(fit_scale)
+        margin = self._pan_margin
+        self.centerOn(margin + pix.width() / 2.0, margin + pix.height() / 2.0)
+              
     def pan_by(self, dx: int, dy: int):
         if self._pixmap_item is None:
             return
@@ -12606,10 +12839,10 @@ class SingleViewer(QGraphicsView):
         vbar.setValue(vbar.value() - int(round(dy / scale_y)))
 
     def wheelEvent(self, event):
-        factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
-        self.scale_factor *= factor
-        self.scale(factor, factor)
-        self.zoom_changed_signal.emit(self.scale_factor)
+        if event.angleDelta().y() > 0:
+            self.zoom_in()
+        else:
+            self.zoom_out()
 
     def dragEnterEvent(self, event):
         if image_paths_from_mime_data(event.mimeData()):
@@ -14345,6 +14578,7 @@ class AstroApp(QMainWindow):
         self.starnet_dialog = None
         self.deepsnr_dialog = None
         self.mosaic_dialog = None
+        self.stack_dialog = None
         self.fly3d_dialog = None
         self.preferences_dialog = None
         self.active_image_window = None
@@ -14393,6 +14627,9 @@ class AstroApp(QMainWindow):
         self.starnet_generate_starmask = False
         self.mosaic_mode = "auto"
         self.mosaic_sort_by_name = True
+        self.stack_method = "median"
+        self.stack_align_frames = True
+        self.stack_use_calibration = False
         self.starnet_stride = 16
 
         # ---------- theme ----------
@@ -14580,6 +14817,22 @@ class AstroApp(QMainWindow):
                 sort_by_name=bool(getattr(self, "mosaic_sort_by_name", True)),
             )
         return self.mosaic_dialog
+
+    def _get_stack_dialog(self):
+        if self.stack_dialog is None:
+            self.stack_dialog = StackDialog(
+                self,
+                method=getattr(self, "stack_method", "median"),
+                align_frames=bool(getattr(self, "stack_align_frames", True)),
+                use_calibration=bool(getattr(self, "stack_use_calibration", False)),
+            )
+        else:
+            self.stack_dialog.set_parameters(
+                method=getattr(self, "stack_method", "median"),
+                align_frames=bool(getattr(self, "stack_align_frames", True)),
+                use_calibration=bool(getattr(self, "stack_use_calibration", False)),
+            )
+        return self.stack_dialog
 
     def _get_fly3d_dialog(self):
         source = self.get_effective_magic_img() if self.magic_img is not None else None
@@ -14958,6 +15211,9 @@ class AstroApp(QMainWindow):
         if lower in ("mosaic", "mozaika", "stitch", "stitching", "panorama"):
             self.create_mosaic_from_frames()
             return
+        if lower in ("stack", "stacking", "stack frames", "stackowanie", "stackuj"):
+            self.create_stack_from_frames()
+            return
         if lower in ("levels", "level"):
             self.show_levels_window()
             return
@@ -14972,6 +15228,9 @@ class AstroApp(QMainWindow):
             return
         if lower in ("ghs", "ghs stretch", "generalized hyperbolic stretch", "generalised hyperbolic stretch"):
             self.show_ghs_dialog()
+            return
+        if lower in ("autostretch", "auto stretch", "auto-stretch"):
+            self.apply_auto_stretch()
             return
         if lower in ("curves reset", "curve reset", "lut reset"):
             self.curves_window.reset_curves()
@@ -15035,10 +15294,12 @@ class AstroApp(QMainWindow):
             "rotate                   open Rotate dialog",
             "crop                     open Crop dialog",
             "mosaic / mozaika         stitch many frames into one image",
+            "stack / stackowanie      stack many frames into one image",
             "levels                   open Levels window",
             "menu                     open Menu dialog",
             "curves / lut             open Curves (LUT) window",
             "ghs                      open GHS Stretch dialog",
+            "autostretch              apply automatic histogram stretch",
             "curves reset             reset the Curves LUT",
             "histogram                open Histogram window",
             "correction               open correction panels",
@@ -15172,6 +15433,93 @@ class AstroApp(QMainWindow):
         self.ghs_dialog.raise_()
         self.ghs_dialog.activateWindow()
         self.log("GHS dialog opened.")
+
+    def _on_bottom_stretch_selected(self, index):
+        if not hasattr(self, "combo_autostretch_bottom"):
+            return
+        mode = self.combo_autostretch_bottom.itemData(index)
+        self.apply_auto_stretch(mode=mode, commit=False)
+
+    def apply_auto_stretch(self, mode="auto", commit=True):
+        if self.magic_img is None:
+            self.log("AutoStretch skipped: no image loaded.", "warning")
+            return
+
+        source = self.magic_img.copy()
+        profiles = {
+            "weak": (1.0, 99.6, 0.95),
+            "medium": (1.0, 99.5, 0.85),
+            "strong": (0.5, 99.7, 0.70),
+        }
+        selected_mode = str(mode or "auto").strip().lower()
+        if selected_mode == "linear":
+            result = source.copy()
+        else:
+            if selected_mode in profiles:
+                low_pct, high_pct, gamma = profiles[selected_mode]
+            else:
+                selected_mode = "auto"
+                low_pct, high_pct, gamma = 1.0, 99.5, 0.85
+
+            work = source.astype(np.float32)
+            if selected_mode == "auto":
+                std_value = float(np.std(work))
+                if std_value < 8.0:
+                    gamma = 0.65
+                    low_pct = 0.5
+                    high_pct = 99.8
+                elif std_value < 20.0:
+                    gamma = 0.75
+                    low_pct = 0.8
+                    high_pct = 99.7
+                elif std_value < 35.0:
+                    gamma = 0.80
+                    low_pct = 1.0
+                    high_pct = 99.6
+
+            if work.ndim == 2:
+                low = float(np.percentile(work, low_pct))
+                high = float(np.percentile(work, high_pct))
+                if high <= low + 1e-6:
+                    self.log("AutoStretch skipped: image dynamic range is too small.", "warning")
+                    return
+                norm = np.clip((work - low) / (high - low), 0.0, 1.0)
+                stretched = np.power(norm, gamma)
+                result = np.clip(stretched * 255.0, 0, 255).astype(np.uint8)
+            else:
+                low = np.percentile(work, low_pct, axis=(0, 1), keepdims=True)
+                high = np.percentile(work, high_pct, axis=(0, 1), keepdims=True)
+                denom = np.maximum(high - low, 1e-6)
+                if float(np.max(denom)) <= 1e-6:
+                    self.log("AutoStretch skipped: image dynamic range is too small.", "warning")
+                    return
+                norm = np.clip((work - low) / denom, 0.0, 1.0)
+                stretched = np.power(norm, gamma)
+                result = np.clip(stretched * 255.0, 0, 255).astype(np.uint8)
+
+        mode_label = {
+            "linear": "Linear Stretch",
+            "weak": "Weak Stretch",
+            "medium": "Medium Stretch",
+            "strong": "Strong Stretch",
+            "auto": "Auto Stretch",
+        }.get(selected_mode, "Auto Stretch")
+
+        if bool(commit):
+            self.preview_override_img = None
+            self.undo_stack.append(source)
+            self.redo_stack.clear()
+            self.magic_img = result
+            self.levels_window.levels_widget.set_image(self.magic_img)
+            self.viewer.set_before(np_to_qpixmap(self.magic_img))
+            self.apply_full_processing()
+            self.update_menu_actions()
+            self.log(f"{mode_label} applied.", "success")
+            return
+
+        self.preview_override_img = result
+        self.apply_full_processing()
+        self.log(f"{mode_label} preview.", "info")
 
     def apply_gaussian_blur_filter(self):
         if self.magic_img is None:
@@ -15543,10 +15891,12 @@ class AstroApp(QMainWindow):
             ("action_levels", "action_levels", "Levels"),
             ("action_curves", "action_curves", "Curves (LUT)"),
             ("action_ghs", "action_ghs", "GHS Stretch"),
+            ("action_auto_stretch", "action_auto_stretch", "AutoStretch"),
             ("action_blur", "action_blur", "Gaussian Blur"),
             ("action_rotate", "action_rotate", "Rotate"),
             ("action_crop", "action_crop", "Crop"),
             ("action_mosaic", "action_mosaic", "Frame Mosaic"),
+            ("action_stack", "action_stack", "Frame Stack"),
         ]
         for attr, key, default in action_map:
             action = getattr(self, attr, None)
@@ -15579,6 +15929,7 @@ class AstroApp(QMainWindow):
             ("btn_rotate_top", "top_rotate", "Rotate"),
             ("btn_crop_top", "top_crop", "Crop"),
             ("btn_mosaic_top", "top_mosaic", "Mosaic"),
+            ("btn_stack_top", "top_stack_frames", "Stack"),
             ("btn_corr_top", "top_correction", "Correction"),
             ("btn_calib_top", "top_color_calibration", "Calibration"),
             ("btn_levels_top", "top_levels", "Levels"),
@@ -15598,6 +15949,9 @@ class AstroApp(QMainWindow):
                 button.setToolTip(translated)
                 button.setStatusTip(translated)
                 button.setAccessibleName(translated)
+
+        if hasattr(self, "combo_autostretch_bottom"):
+            self.combo_autostretch_bottom.setToolTip("Stretch mode")
 
         if self.preferences_dialog is not None and hasattr(self.preferences_dialog, "refresh_joystick_controls"):
             self.preferences_dialog.refresh_joystick_controls()
@@ -15624,6 +15978,7 @@ class AstroApp(QMainWindow):
             "plate_solve_dialog",
             "starnet_dialog",
             "mosaic_dialog",
+            "stack_dialog",
             "fly3d_dialog",
             "ghs_dialog",
             "star_shrink_dialog",
@@ -16663,6 +17018,9 @@ class AstroApp(QMainWindow):
         self.action_ghs = QAction("GHS Stretch", self)
         self.action_ghs.triggered.connect(self.show_ghs_dialog)
 
+        self.action_auto_stretch = QAction("AutoStretch", self)
+        self.action_auto_stretch.triggered.connect(self.apply_auto_stretch)
+
         self.action_blur = QAction("Gaussian Blur", self)
         self.action_blur.triggered.connect(self.apply_gaussian_blur_filter)
         self.action_blur.setEnabled(False)
@@ -16678,9 +17036,30 @@ class AstroApp(QMainWindow):
         self.action_mosaic = QAction("Frame Mosaic", self)
         self.action_mosaic.triggered.connect(self.create_mosaic_from_frames)
 
+        self.action_stack = QAction("Frame Stack", self)
+        self.action_stack.triggered.connect(self.create_stack_from_frames)
+
         # SkrĂłty klawiszowe dziaĹ‚ajÄ…ce bez MenuBar
         self.addAction(self.action_undo)
         self.addAction(self.action_redo)
+
+        self.action_view_zoom_in = QAction("Zoom in", self)
+        self.action_view_zoom_in.setShortcuts(["+", "=", "Ctrl++", "Ctrl+="])
+        self.action_view_zoom_in.setShortcutContext(Qt.WindowShortcut)
+        self.action_view_zoom_in.triggered.connect(lambda: self.viewer.view.zoom_in() if hasattr(self, "viewer") else None)
+        self.addAction(self.action_view_zoom_in)
+
+        self.action_view_zoom_out = QAction("Zoom out", self)
+        self.action_view_zoom_out.setShortcuts(["-", "_", "Ctrl+-"])
+        self.action_view_zoom_out.setShortcutContext(Qt.WindowShortcut)
+        self.action_view_zoom_out.triggered.connect(lambda: self.viewer.view.zoom_out() if hasattr(self, "viewer") else None)
+        self.addAction(self.action_view_zoom_out)
+
+        self.action_view_zoom_fit = QAction("Fit to window", self)
+        self.action_view_zoom_fit.setShortcuts(["0", "Ctrl+0"])
+        self.action_view_zoom_fit.setShortcutContext(Qt.WindowShortcut)
+        self.action_view_zoom_fit.triggered.connect(lambda: self.viewer.view.fit_to_window() if hasattr(self, "viewer") else None)
+        self.addAction(self.action_view_zoom_fit)
 
         def _add_top_btn(text, action=None, callback=None):
             btn = DraggableTopActionButton("")
@@ -16730,6 +17109,7 @@ class AstroApp(QMainWindow):
         self.btn_rotate_top = _add_top_btn("Rotate", action=self.action_rotate)
         self.btn_crop_top = _add_top_btn("Crop", action=self.action_crop)
         self.btn_mosaic_top = _add_top_btn("Mosaic", action=self.action_mosaic)
+        self.btn_stack_top = _add_top_btn("Stack", action=self.action_stack)
         self.btn_corr_top = _add_top_btn("Correction", action=self.action_correction)
         self.btn_calib_top = _add_top_btn("Calibration", action=self.action_color_calibration)
         self.btn_levels_top = _add_top_btn("Levels", action=self.action_levels)
@@ -16766,6 +17146,7 @@ class AstroApp(QMainWindow):
             "btn_rotate_top",
             "btn_crop_top",
             "btn_mosaic_top",
+            "btn_stack_top",
             "btn_corr_top",
             "btn_calib_top",
             "btn_levels_top",
@@ -16815,6 +17196,7 @@ class AstroApp(QMainWindow):
             "btn_rotate_top": "rotate.svg",
             "btn_crop_top": "crop.svg",
             "btn_mosaic_top": "mosaic.svg",
+            "btn_stack_top": "mosaic.svg",
             "btn_corr_top": "correction.svg",
             "btn_calib_top": "correction.svg",
             "btn_levels_top": "levels.svg",
@@ -16842,6 +17224,8 @@ class AstroApp(QMainWindow):
 
         left_panel = QFrame()
         left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(6)
         
         self.camera_raw_panel = CameraRawPanel(self.on_params_changed)
         self.hsl_panel = HSLPanel(self.on_params_changed)
@@ -16856,12 +17240,42 @@ class AstroApp(QMainWindow):
         self.lbl_plate_designation = self.plate_solving_dialog.lbl_plate_designation
         self.lbl_plate_objects_in_field = self.plate_solving_dialog.lbl_plate_objects_in_field
 
-        self.ai_assistant_panel = AIAssistantPanel(parent=left_panel, app=self)
-        left_layout.addWidget(self.ai_assistant_panel, 1)
+        processing_label = QLabel("Processing:")
+        left_layout.addWidget(processing_label)
+        self.processing_progress = CircularProgressBar()
+        self.processing_progress.setRange(0, 100)
+        self.processing_progress.setValue(0)
+        self.processing_progress.setVisible(False)
+        left_layout.addWidget(self.processing_progress, 0, Qt.AlignHCenter)
+
+        thumbnails_scroll = QScrollArea()
+        thumbnails_scroll.setWidgetResizable(True)
+        thumbnails_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        thumbnails_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        self.thumbnails_container = ThumbnailTreeContainer()
+        self.thumbnails_layout = QGridLayout(self.thumbnails_container)
+        self.thumbnails_layout.setContentsMargins(0, 0, 0, 0)
+        self.thumbnails_layout.setSpacing(5)
+        self.thumbnails_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+
+        thumbnails_scroll.setWidget(self.thumbnails_container)
+        left_layout.addWidget(thumbnails_scroll, 1)
+
+        left_panel.setMinimumWidth(240)
+        left_panel.setMaximumWidth(500)
+
+        right_panel = QFrame()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(6)
+
+        self.ai_assistant_panel = AIAssistantPanel(parent=right_panel, app=self)
+        right_layout.addWidget(self.ai_assistant_panel, 1)
 
         # Ustawienie minimalnej szerokoĹ›ci panelu bocznego
-        left_panel.setMinimumWidth(280)
-        left_panel.setMaximumWidth(600)
+        right_panel.setMinimumWidth(280)
+        right_panel.setMaximumWidth(600)
 
         self.viewer = BlendViewer()
         self.viewer.view.zoom_changed_signal.connect(self.update_viewer_overlay)
@@ -16876,60 +17290,51 @@ class AstroApp(QMainWindow):
 
         # Splitter umoĹĽliwia zmianÄ™ rozmiaru paneli poprzez przeciÄ…gniÄ™cie
         splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(self.viewer)
         splitter.addWidget(left_panel)
-        splitter.setStretchFactor(0, 1)  # Viewer rozciÄ…gniÄ™ty
-        splitter.setStretchFactor(1, 0)  # Prawy panel nie rozkĹ‚adaÄ‡
-        splitter.setCollapsible(0, False)  # Viewer nie moĹĽe byÄ‡ schowany
-        splitter.setCollapsible(1, True)  # MoĹĽliwoĹ›Ä‡ schowania prawego panelu
-        splitter.setSizes([1250, 350])  # DomyĹ›lne rozmiary
+        splitter.addWidget(self.viewer)
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 0)  # Lewy panel pomocniczy
+        splitter.setStretchFactor(1, 1)  # Viewer rozciÄ…gniÄ™ty
+        splitter.setStretchFactor(2, 0)  # Prawy panel narzedzi
+        splitter.setCollapsible(0, True)  # MoĹĽliwoĹ›Ä‡ schowania lewego panelu
+        splitter.setCollapsible(1, False)  # Viewer nie moĹĽe byÄ‡ schowany
+        splitter.setCollapsible(2, True)  # MoĹĽliwoĹ›Ä‡ schowania prawego panelu
+        splitter.setSizes([320, 1050, 350])  # DomyĹ›lne rozmiary
 
         center_layout.addWidget(splitter)
 
-        # --- Dolny panel z progresem i miniaturkami ---
+        main_layout.addLayout(center_layout, 1)
+
         bottom_panel = QFrame()
-        bottom_panel.setMinimumHeight(90)
-        bottom_layout = QVBoxLayout(bottom_panel)
-        bottom_layout.setContentsMargins(5, 5, 5, 5)
+        bottom_layout = QHBoxLayout(bottom_panel)
+        bottom_layout.setContentsMargins(10, 6, 10, 6)
+        bottom_layout.setSpacing(8)
 
-        # Progress bar
-        progress_label = QLabel("Processing:")
-        bottom_layout.addWidget(progress_label)
-        self.processing_progress = CircularProgressBar()
-        self.processing_progress.setRange(0, 100)
-        self.processing_progress.setValue(0)
-        self.processing_progress.setVisible(False)
-        bottom_layout.addWidget(self.processing_progress, 0, Qt.AlignHCenter)
+        self.combo_autostretch_bottom = QComboBox()
+        self.combo_autostretch_bottom.setToolTip("Stretch mode")
+        self.combo_autostretch_bottom.addItem("Linear", "linear")
+        self.combo_autostretch_bottom.addItem("Weak Stretch", "weak")
+        self.combo_autostretch_bottom.addItem("Medium Stretch", "medium")
+        self.combo_autostretch_bottom.addItem("Strong Stretch", "strong")
+        self.combo_autostretch_bottom.addItem("Auto Stretch", "auto")
+        self.combo_autostretch_bottom.setCurrentIndex(4)
+        self.combo_autostretch_bottom.activated.connect(self._on_bottom_stretch_selected)
+        bottom_layout.addWidget(self.combo_autostretch_bottom)
+        self.btn_zoom_out_bottom = QPushButton("Pomniejsz -")
+        self.btn_zoom_out_bottom.setToolTip("Pomniejsz podglad")
+        self.btn_zoom_out_bottom.clicked.connect(self.viewer.view.zoom_out)
+        bottom_layout.addWidget(self.btn_zoom_out_bottom)
+        self.btn_zoom_in_bottom = QPushButton("Powieksz +")
+        self.btn_zoom_in_bottom.setToolTip("Powieksz podglad")
+        self.btn_zoom_in_bottom.clicked.connect(self.viewer.view.zoom_in)
+        bottom_layout.addWidget(self.btn_zoom_in_bottom)
+        self.btn_zoom_fit_bottom = QPushButton("Dopasuj do okna")
+        self.btn_zoom_fit_bottom.setToolTip("Dopasuj obraz do rozmiaru okna")
+        self.btn_zoom_fit_bottom.clicked.connect(self.viewer.view.fit_to_window)
+        bottom_layout.addWidget(self.btn_zoom_fit_bottom)
+        bottom_layout.addStretch(1)
 
-        # Scroll area z miniaturkami
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        
-        self.thumbnails_container = ThumbnailTreeContainer()
-        self.thumbnails_layout = QGridLayout(self.thumbnails_container)
-        self.thumbnails_layout.setContentsMargins(0, 0, 0, 0)
-        self.thumbnails_layout.setSpacing(5)
-        self.thumbnails_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        
-        scroll.setWidget(self.thumbnails_container)
-        bottom_layout.addWidget(scroll)
-
-        center_container = QWidget()
-        center_container.setLayout(center_layout)
-
-        # Pionowy splitter: gĂłrna sekcja robocza + dolny panel historii/progresu
-        vertical_splitter = QSplitter(Qt.Vertical)
-        vertical_splitter.addWidget(center_container)
-        vertical_splitter.addWidget(bottom_panel)
-        vertical_splitter.setStretchFactor(0, 1)
-        vertical_splitter.setStretchFactor(1, 0)
-        vertical_splitter.setCollapsible(0, False)
-        vertical_splitter.setCollapsible(1, True)
-        vertical_splitter.setSizes([900, 170])
-
-        main_layout.addWidget(vertical_splitter, 1)
+        main_layout.addWidget(bottom_panel)
         self.setCentralWidget(main_widget)
 
         self.update_menu_actions()
@@ -17173,6 +17578,217 @@ class AstroApp(QMainWindow):
         self.apply_full_processing()
         self.add_thumbnail(f"Mosaic ({len(frames)} frames)", self.processed_img)
         self.log(f"Mosaic ready: {len(frames)} frames stitched ({used_mode}).", "success")
+
+    def create_stack_from_frames(self):
+        paths, _ = self._show_open_files_dialog(
+            "Wybierz klatki do stackowania",
+            "Obrazy (*.png *.jpg *.jpeg *.tif *.tiff *.fits *.fit *.fts);;Wszystkie pliki (*)",
+            "",
+        )
+        paths = [str(path or "").strip() for path in (paths or []) if str(path or "").strip()]
+        if not paths:
+            self.log("Stacking canceled.", "warning")
+            return
+        if len(paths) < 2:
+            self.log("Stacking needs at least 2 frames.", "warning")
+            return
+
+        dialog = self._get_stack_dialog()
+        if dialog.exec_() != QDialog.Accepted:
+            self.log("Stacking canceled.", "warning")
+            return
+        params = dialog.get_parameters()
+        method_key = str(params.get("method") or "median").strip().lower()
+        method_key = "average" if method_key == "average" else "median"
+        align_frames = bool(params.get("align_frames", True))
+        use_calibration = bool(params.get("use_calibration", False))
+        self.stack_method = method_key
+        self.stack_align_frames = align_frames
+        self.stack_use_calibration = use_calibration
+
+        frames = []
+        invalid_paths = []
+        mismatched_paths = []
+
+        reference_shape = None
+        for path in paths:
+            try:
+                frame = normalize_to_uint8_bgr(safe_imread(path))
+                if frame is None or frame.size == 0:
+                    raise RuntimeError("empty frame")
+                if reference_shape is None:
+                    reference_shape = frame.shape[:2]
+                if frame.shape[:2] != reference_shape:
+                    mismatched_paths.append(path)
+                    continue
+                frames.append(frame)
+            except Exception:
+                invalid_paths.append(path)
+
+        if len(frames) < 2:
+            self.log("Stacking failed: not enough valid frames with matching dimensions.", "error")
+            return
+
+        calibration_filter = "Obrazy (*.png *.jpg *.jpeg *.tif *.tiff *.fits *.fit *.fts);;Wszystkie pliki (*)"
+
+        def _build_master_frame(file_paths, label):
+            selected = [str(path or "").strip() for path in (file_paths or []) if str(path or "").strip()]
+            if not selected:
+                return None, 0, 0
+            valid = []
+            bad_count = 0
+            for path in selected:
+                try:
+                    frame = normalize_to_uint8_bgr(safe_imread(path))
+                    if frame is None or frame.size == 0:
+                        raise RuntimeError("empty frame")
+                    if frame.shape[:2] != reference_shape:
+                        bad_count += 1
+                        continue
+                    valid.append(frame.astype(np.float32))
+                except Exception:
+                    bad_count += 1
+            if not valid:
+                self.log(f"No valid {label} frames loaded.", "warning")
+                return None, 0, bad_count
+            master = np.median(np.stack(valid, axis=0), axis=0)
+            self.log(f"Master {label}: {len(valid)} frame(s).", "info")
+            return master, len(valid), bad_count
+
+        master_bias = None
+        master_dark = None
+        master_flat = None
+        flat_norm = None
+
+        if use_calibration:
+            bias_paths, _ = self._show_open_files_dialog(
+                "Wybierz klatki BIAS (opcjonalnie)",
+                calibration_filter,
+                "",
+            )
+            dark_paths, _ = self._show_open_files_dialog(
+                "Wybierz klatki DARK (opcjonalnie)",
+                calibration_filter,
+                "",
+            )
+            flat_paths, _ = self._show_open_files_dialog(
+                "Wybierz klatki FLAT (opcjonalnie)",
+                calibration_filter,
+                "",
+            )
+
+            master_bias, _bias_ok, bias_bad = _build_master_frame(bias_paths, "bias")
+            master_dark, _dark_ok, dark_bad = _build_master_frame(dark_paths, "dark")
+            master_flat, _flat_ok, flat_bad = _build_master_frame(flat_paths, "flat")
+
+            if bias_bad > 0:
+                self.log(f"Skipped invalid bias frames: {bias_bad}", "warning")
+            if dark_bad > 0:
+                self.log(f"Skipped invalid dark frames: {dark_bad}", "warning")
+            if flat_bad > 0:
+                self.log(f"Skipped invalid flat frames: {flat_bad}", "warning")
+
+            if master_flat is not None:
+                flat_work = master_flat.copy()
+                if master_bias is not None:
+                    flat_work = flat_work - master_bias
+                flat_work = np.maximum(flat_work, 1.0)
+                flat_mean = float(np.mean(flat_work))
+                if flat_mean > 1e-6:
+                    flat_norm = flat_work / flat_mean
+                else:
+                    self.log("Flat normalization failed. FLAT calibration disabled.", "warning")
+                    flat_norm = None
+
+            if master_bias is None and master_dark is None and flat_norm is None:
+                self.log("Calibration requested, but no valid calibration frames were selected.", "warning")
+
+        def _calibrate_light(frame_u8: np.ndarray) -> np.ndarray:
+            calibrated = frame_u8.astype(np.float32)
+            if master_dark is not None:
+                calibrated = calibrated - master_dark
+            if master_bias is not None:
+                calibrated = calibrated - master_bias
+            if flat_norm is not None:
+                calibrated = calibrated / np.maximum(flat_norm, 1e-3)
+            return np.clip(calibrated, 0.0, 255.0).astype(np.uint8)
+
+        if master_bias is not None or master_dark is not None or flat_norm is not None:
+            frames = [_calibrate_light(frame) for frame in frames]
+
+        frame_stack = [frames[0].astype(np.float32)]
+        alignment_failures = 0
+
+        if align_frames:
+            ref_gray = cv2.cvtColor(frames[0], cv2.COLOR_BGR2GRAY).astype(np.float32)
+            for frame in frames[1:]:
+                try:
+                    current_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+                    shift, _response = cv2.phaseCorrelate(ref_gray, current_gray)
+                    dx = float(shift[0])
+                    dy = float(shift[1])
+                    matrix = np.float32([[1.0, 0.0, -dx], [0.0, 1.0, -dy]])
+                    aligned = cv2.warpAffine(
+                        frame,
+                        matrix,
+                        (frame.shape[1], frame.shape[0]),
+                        flags=cv2.INTER_LINEAR,
+                        borderMode=cv2.BORDER_REFLECT101,
+                    )
+                    frame_stack.append(aligned.astype(np.float32))
+                except Exception:
+                    frame_stack.append(frame.astype(np.float32))
+                    alignment_failures += 1
+        else:
+            frame_stack.extend(frame.astype(np.float32) for frame in frames[1:])
+
+        cube = np.stack(frame_stack, axis=0)
+        if method_key == "median":
+            stacked = np.median(cube, axis=0)
+        else:
+            stacked = np.mean(cube, axis=0)
+        stacked = np.clip(stacked, 0, 255).astype(np.uint8)
+
+        self.magic_img = stacked
+        self.original_img = stacked.copy()
+        self.processed_img = stacked.copy()
+        self.current_image_path = ""
+        self.current_save_path = None
+        self.latest_image_analysis = {}
+        self.analysis_dirty = True
+
+        if hasattr(self, "undo_stack"):
+            self.undo_stack.clear()
+        if hasattr(self, "redo_stack"):
+            self.redo_stack.clear()
+        if hasattr(self, "processing_history"):
+            self.processing_history.clear()
+        self.thumbnail_next_id = 1
+        self.selected_thumbnail_index = -1
+        self.current_history_node_id = None
+
+        self.viewer.set_before(np_to_qpixmap(self.processed_img))
+        self.update_menu_actions()
+        self.apply_full_processing()
+
+        self.add_thumbnail(f"Stack ({len(frame_stack)} frames)", self.processed_img)
+        mode_name = "median" if method_key == "median" else "average"
+        align_name = "aligned" if align_frames else "no alignment"
+        calibration_enabled = master_bias is not None or master_dark is not None or flat_norm is not None
+        calibration_name = "with calibration" if calibration_enabled else "no calibration"
+        self.log(f"Stack ready: {len(frame_stack)} frames ({mode_name}, {align_name}, {calibration_name}).", "success")
+        if alignment_failures > 0:
+            self.log(f"Alignment fallback used for {alignment_failures} frame(s).", "warning")
+        if invalid_paths:
+            preview = ", ".join(os.path.basename(path) for path in invalid_paths[:3])
+            if len(invalid_paths) > 3:
+                preview += ", ..."
+            self.log(f"Skipped unreadable frames: {preview}", "warning")
+        if mismatched_paths:
+            preview = ", ".join(os.path.basename(path) for path in mismatched_paths[:3])
+            if len(mismatched_paths) > 3:
+                preview += ", ..."
+            self.log(f"Skipped frames with different size: {preview}", "warning")
 
     def _handle_dropped_images(self, paths):
         if not paths:
@@ -18980,6 +19596,10 @@ class AstroApp(QMainWindow):
                 action.setEnabled(has_img)
         if hasattr(self, "action_deepsnr"):
             self.action_deepsnr.setEnabled(has_any_image)
+        if hasattr(self, "action_auto_stretch"):
+            self.action_auto_stretch.setEnabled(has_img)
+        if hasattr(self, "combo_autostretch_bottom"):
+            self.combo_autostretch_bottom.setEnabled(True)
         if hasattr(self, "action_delete_layer"):
             self.action_delete_layer.setEnabled(self.can_delete_layer(getattr(self, "selected_layer_key", None)))
         if hasattr(self, "action_undo"):
