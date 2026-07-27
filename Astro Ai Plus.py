@@ -1184,6 +1184,145 @@ class CircularProgressBar(QWidget):
             painter.drawText(arc_rect, Qt.AlignCenter, text)
 
 
+class StackingProcessWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._scene = "idle"
+        self._phase = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(40)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start()
+        self.setMinimumHeight(96)
+
+    def set_scene(self, scene: str):
+        normalized = str(scene or "idle").strip().lower()
+        if normalized not in {"idle", "loading", "calibration", "debayer", "align", "stacking", "finished"}:
+            normalized = "idle"
+        if normalized != self._scene:
+            self._scene = normalized
+            self.update()
+
+    def _tick(self):
+        self._phase = (self._phase + 0.06) % (2.0 * math.pi)
+        self.update()
+
+    def _draw_frame_card(self, painter: QPainter, cx: float, cy: float, w: float, h: float, alpha: int):
+        rect = QRectF(cx - w / 2.0, cy - h / 2.0, w, h)
+        fill = QColor(128, 182, 255, max(26, min(210, alpha)))
+        stroke = QColor(214, 232, 255, max(40, min(245, int(alpha * 1.15))))
+        painter.setPen(QPen(stroke, 1.0))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(rect, 5.0, 5.0)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        bg_rect = self.rect().adjusted(1, 1, -1, -1)
+        painter.setPen(QPen(QColor("#38516b"), 1.0))
+        painter.setBrush(QColor("#0f1720"))
+        painter.drawRoundedRect(bg_rect, 7.0, 7.0)
+
+        w = float(max(1, self.width()))
+        h = float(max(1, self.height()))
+        cx = w * 0.5
+        cy = h * 0.52
+
+        if self._scene == "finished":
+            glow = 0.55 + 0.35 * (0.5 + 0.5 * math.sin(self._phase * 1.8))
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(90, 220, 130, int(90 * glow)))
+            painter.drawEllipse(QPointF(cx, cy), 34.0, 24.0)
+            self._draw_frame_card(painter, cx, cy, 72.0, 46.0, 190)
+            return
+
+        if self._scene == "stacking":
+            cycle = (self._phase % (2.0 * math.pi)) / (2.0 * math.pi)
+            cards_total = 6
+            arrived = 0
+
+            for i in range(cards_total):
+                delay = i * 0.10
+                travel = 0.52
+                local = (cycle - delay) / travel
+                local = max(0.0, min(1.0, local))
+                eased = local * local * (3.0 - 2.0 * local)
+
+                if local >= 0.995:
+                    arrived += 1
+
+                start_x = cx - 98.0 + i * 30.0
+                start_y = cy - 20.0 + i * 4.0
+                drift_x = math.sin(self._phase * 1.15 + i * 0.9) * 7.0
+                drift_y = math.cos(self._phase * 1.05 + i * 0.8) * 3.0
+
+                card_x = start_x * (1.0 - eased) + cx * eased + drift_x * (1.0 - eased)
+                card_y = start_y * (1.0 - eased) + cy * eased + drift_y * (1.0 - eased)
+
+                card_w = 58.0 + (1.0 - eased) * 8.0
+                card_h = 35.0 + (1.0 - eased) * 5.0
+                alpha = int(85 + 120 * (1.0 - eased) + 35 * eased)
+                self._draw_frame_card(painter, card_x, card_y, card_w, card_h, alpha)
+
+            for k in range(arrived):
+                back = float(arrived - 1 - k)
+                stack_x = cx - back * 1.8
+                stack_y = cy - back * 1.1
+                stack_alpha = int(72 + min(150, k * 22))
+                self._draw_frame_card(painter, stack_x, stack_y, 66.0, 40.0, stack_alpha)
+
+            merge_phase = max(0.0, min(1.0, (cycle - 0.78) / 0.22))
+            if merge_phase > 0.0:
+                pulse = merge_phase * merge_phase * (3.0 - 2.0 * merge_phase)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(160, 230, 255, int(35 + 70 * pulse)))
+                painter.drawEllipse(QPointF(cx, cy), 24.0 + 14.0 * pulse, 16.0 + 9.0 * pulse)
+                self._draw_frame_card(painter, cx, cy, 70.0 + 6.0 * pulse, 44.0 + 3.0 * pulse, int(165 + 65 * pulse))
+            return
+
+        if self._scene == "align":
+            for i in range(3):
+                shift = math.sin(self._phase * 2.0 + i * 1.2) * 10.0
+                self._draw_frame_card(painter, cx - 42 + i * 42 + shift, cy, 52.0, 32.0, 120 + i * 28)
+            pen = QPen(QColor(245, 224, 140, 170), 1.2)
+            painter.setPen(pen)
+            painter.drawLine(int(cx - 62), int(cy), int(cx + 62), int(cy))
+            return
+
+        if self._scene == "debayer":
+            tile = 10.0
+            start_x = cx - 26.0
+            start_y = cy - 20.0
+            for y in range(4):
+                for x in range(6):
+                    phase = (x + y) * 0.5
+                    pulse = 0.55 + 0.45 * math.sin(self._phase * 2.0 + phase)
+                    color = QColor(170, 210, 255, int(60 + 100 * pulse))
+                    painter.setPen(Qt.NoPen)
+                    painter.setBrush(color)
+                    painter.drawRect(QRectF(start_x + x * tile, start_y + y * tile, tile - 1.5, tile - 1.5))
+            return
+
+        if self._scene in ("loading", "calibration"):
+            total = 6
+            base_x = cx - 60.0
+            for i in range(total):
+                phase = (self._phase * 2.4 - i * 0.42)
+                pulse = max(0.1, 0.5 + 0.5 * math.sin(phase))
+                y_off = -6.0 if self._scene == "calibration" else 0.0
+                alpha = int(40 + pulse * 150)
+                self._draw_frame_card(painter, base_x + i * 24.0, cy + y_off + pulse * 5.0, 20.0, 14.0, alpha)
+            return
+
+        dots = 5
+        for i in range(dots):
+            pulse = 0.45 + 0.55 * math.sin(self._phase * 2.6 - i * 0.6)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(170, 205, 245, int(40 + 130 * max(0.0, pulse))))
+            painter.drawEllipse(QPointF(cx - 38 + i * 19, cy), 4.5, 4.5)
+
+
 class PlateSolvingDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2194,11 +2333,20 @@ class MosaicDialog(QDialog):
 
 
 class StackDialog(QDialog):
-    def __init__(self, parent=None, method: str = "median", align_frames: bool = True, use_calibration: bool = False):
+    def __init__(
+        self,
+        parent=None,
+        method: str = "median",
+        align_frames: bool = True,
+        use_calibration: bool = False,
+        bayer_pattern: str = "AUTO",
+        selected_files=None,
+    ):
         super().__init__(parent)
         apply_dialog_window_flags(self)
         self.setWindowTitle("Frame Stacking")
         self.setMinimumWidth(460)
+        self.selected_files = []
 
         layout = QVBoxLayout(self)
         apply_standard_layout_margins(layout)
@@ -2216,18 +2364,41 @@ class StackDialog(QDialog):
         stack_layout.setHorizontalSpacing(10)
         stack_layout.setVerticalSpacing(10)
 
-        stack_layout.addWidget(QLabel("Stack method:"), 0, 0)
+        stack_layout.addWidget(QLabel("Frames:"), 0, 0)
+        self.list_files = QListWidget()
+        stack_layout.addWidget(self.list_files, 1, 0, 1, 2)
+
+        files_button_layout = QHBoxLayout()
+        self.btn_add_files = QPushButton("Add files")
+        self.btn_remove_files = QPushButton("Remove selected")
+        self.btn_clear_files = QPushButton("Clear list")
+        files_button_layout.addWidget(self.btn_add_files)
+        files_button_layout.addWidget(self.btn_remove_files)
+        files_button_layout.addWidget(self.btn_clear_files)
+        stack_layout.addLayout(files_button_layout, 2, 0, 1, 2)
+
+        stack_layout.addWidget(QLabel("Stack method:"), 3, 0)
         self.combo_method = QComboBox()
         self.combo_method.addItem("Median", "median")
         self.combo_method.addItem("Average", "average")
-        stack_layout.addWidget(self.combo_method, 0, 1)
+        stack_layout.addWidget(self.combo_method, 3, 1)
 
         self.check_align = QCheckBox("Align frames before stacking")
-        stack_layout.addWidget(self.check_align, 1, 0, 1, 2)
+        stack_layout.addWidget(self.check_align, 4, 0, 1, 2)
+
+        stack_layout.addWidget(QLabel("Bayer pattern:"), 5, 0)
+        self.combo_bayer_pattern = QComboBox()
+        self.combo_bayer_pattern.addItem("Auto (from FITS header)", "AUTO")
+        self.combo_bayer_pattern.addItem("RGGB", "RGGB")
+        self.combo_bayer_pattern.addItem("BGGR", "BGGR")
+        self.combo_bayer_pattern.addItem("GBRG", "GBRG")
+        self.combo_bayer_pattern.addItem("GRBG", "GRBG")
+        self.combo_bayer_pattern.addItem("None / Mono", "NONE")
+        stack_layout.addWidget(self.combo_bayer_pattern, 5, 1)
 
         self.lbl_hint = QLabel("Tip: median rejects outliers better, average can preserve faint signal.")
         self.lbl_hint.setWordWrap(True)
-        stack_layout.addWidget(self.lbl_hint, 2, 0, 1, 2)
+        stack_layout.addWidget(self.lbl_hint, 6, 0, 1, 2)
 
         tabs.addTab(stack_tab, "Stack")
 
@@ -2259,10 +2430,25 @@ class StackDialog(QDialog):
 
         self.btn_run.clicked.connect(self.accept)
         self.btn_cancel.clicked.connect(self.reject)
+        self.btn_add_files.clicked.connect(self._on_add_files)
+        self.btn_remove_files.clicked.connect(self._on_remove_selected_files)
+        self.btn_clear_files.clicked.connect(self._on_clear_files)
 
-        self.set_parameters(method=method, align_frames=align_frames, use_calibration=use_calibration)
+        self.set_parameters(
+            method=method,
+            align_frames=align_frames,
+            use_calibration=use_calibration,
+            bayer_pattern=bayer_pattern,
+        )
+        self.set_selected_files(selected_files or [])
 
-    def set_parameters(self, method: str = "median", align_frames: bool = True, use_calibration: bool = False):
+    def set_parameters(
+        self,
+        method: str = "median",
+        align_frames: bool = True,
+        use_calibration: bool = False,
+        bayer_pattern: str = "AUTO",
+    ):
         wanted = str(method or "median").strip().lower()
         idx = 0
         for i in range(self.combo_method.count()):
@@ -2270,6 +2456,12 @@ class StackDialog(QDialog):
                 idx = i
                 break
         self.combo_method.setCurrentIndex(idx)
+        desired_pattern = normalize_bayer_pattern(bayer_pattern)
+        if not desired_pattern:
+            upper = str(bayer_pattern or "AUTO").strip().upper()
+            desired_pattern = "NONE" if upper in ("NONE", "MONO", "OFF") else "AUTO"
+        pattern_index = max(0, self.combo_bayer_pattern.findData(desired_pattern))
+        self.combo_bayer_pattern.setCurrentIndex(pattern_index)
         self.check_align.setChecked(bool(align_frames))
         self.check_use_calibration.setChecked(bool(use_calibration))
 
@@ -2278,7 +2470,82 @@ class StackDialog(QDialog):
             "method": str(self.combo_method.currentData() or "median"),
             "align_frames": bool(self.check_align.isChecked()),
             "use_calibration": bool(self.check_use_calibration.isChecked()),
+            "bayer_pattern": str(self.combo_bayer_pattern.currentData() or "AUTO"),
         }
+
+    def _stack_frames_filter(self) -> str:
+        return "Obrazy (*.png *.jpg *.jpeg *.tif *.tiff *.fits *.fit *.fts);;Wszystkie pliki (*)"
+
+    def _stack_default_directory(self) -> str:
+        if self.list_files.count() > 0:
+            first_item = self.list_files.item(0)
+            first_path = str(first_item.data(Qt.UserRole) or "").strip() if first_item is not None else ""
+            if first_path:
+                candidate = os.path.dirname(first_path)
+                if candidate and os.path.isdir(candidate):
+                    return candidate
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "_get_default_dialog_directory"):
+            try:
+                candidate = str(parent._get_default_dialog_directory() or "").strip()
+                if candidate and os.path.isdir(candidate):
+                    return candidate
+            except Exception:
+                pass
+        return os.getcwd()
+
+    def set_selected_files(self, file_paths):
+        self.list_files.clear()
+        self._append_files(file_paths)
+
+    def get_selected_files(self):
+        paths = []
+        for idx in range(self.list_files.count()):
+            item = self.list_files.item(idx)
+            path = str(item.data(Qt.UserRole) or "").strip() if item is not None else ""
+            if path:
+                paths.append(path)
+        return paths
+
+    def _append_files(self, file_paths):
+        existing = {path.lower() for path in self.get_selected_files()}
+        for raw_path in file_paths or []:
+            cleaned = str(raw_path or "").strip()
+            if not cleaned:
+                continue
+            abs_path = os.path.abspath(cleaned)
+            if abs_path.lower() in existing:
+                continue
+            item = QListWidgetItem(abs_path)
+            item.setToolTip(abs_path)
+            item.setData(Qt.UserRole, abs_path)
+            self.list_files.addItem(item)
+            existing.add(abs_path.lower())
+
+    def _on_add_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Wybierz klatki do stackowania",
+            self._stack_default_directory(),
+            self._stack_frames_filter(),
+            options=get_safe_file_dialog_options(),
+        )
+        self._append_files(paths)
+
+    def _on_remove_selected_files(self):
+        selected_items = list(self.list_files.selectedItems())
+        if not selected_items:
+            current_row = self.list_files.currentRow()
+            if current_row >= 0:
+                self.list_files.takeItem(current_row)
+            return
+        for item in selected_items:
+            row = self.list_files.row(item)
+            if row >= 0:
+                self.list_files.takeItem(row)
+
+    def _on_clear_files(self):
+        self.list_files.clear()
 
 
 class FlyZoneBrushWidget(QWidget):
@@ -8507,6 +8774,7 @@ class MagicProgressDialog(QDialog):
         layout = QVBoxLayout(self)
         apply_standard_layout_margins(layout)
         self.label_stage = QLabel("Starting...")
+        self.process_visual = StackingProcessWidget(self)
         self.progress_overall = CircularProgressBar()
         self.progress_overall.setRange(0, 100)
         self.progress_overall.setValue(0)
@@ -8517,12 +8785,45 @@ class MagicProgressDialog(QDialog):
         self.progress_current.setValue(0)
 
         layout.addWidget(self.label_stage)
+        layout.addWidget(self.process_visual)
         layout.addWidget(self.progress_overall, 0, Qt.AlignHCenter)
         layout.addWidget(self.label_current)
         layout.addWidget(self.progress_current, 0, Qt.AlignHCenter)
 
+    def _set_scene_from_stage(self, stage_name: str):
+        text = str(stage_name or "").strip().lower()
+        if "stack finished" in text or "done" in text:
+            scene = "finished"
+        elif "stacking" in text:
+            scene = "stacking"
+        elif "align" in text or "register" in text:
+            scene = "align"
+        elif "debayer" in text or "bayer" in text:
+            scene = "debayer"
+        elif "calibration" in text or "master" in text:
+            scene = "calibration"
+        elif "loading" in text or "prepar" in text:
+            scene = "loading"
+        else:
+            scene = "idle"
+        self.process_visual.set_scene(scene)
+
+    def set_visual_stage(self, scene: str):
+        self.process_visual.set_scene(scene)
+
+    def set_current_indeterminate(self, enabled: bool, message: str = ""):
+        if bool(enabled):
+            self.progress_current.setRange(0, 0)
+        else:
+            self.progress_current.setRange(0, 100)
+            self.progress_current.setValue(0)
+        if message:
+            self.label_current.setText(str(message))
+        QApplication.processEvents()
+
     def update_progress(self, stage_name: str, overall_value: int, current_value: int):
         self.label_stage.setText(stage_name)
+        self._set_scene_from_stage(stage_name)
         self.progress_overall.setValue(max(0, min(100, overall_value)))
         self.progress_current.setValue(max(0, min(100, current_value)))
         QApplication.processEvents()
@@ -8530,6 +8831,12 @@ class MagicProgressDialog(QDialog):
 
 FITS_EXTENSIONS = (".fits", ".fit", ".fts")
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tif", ".tiff") + FITS_EXTENSIONS
+BAYER_PATTERN_TO_OPENCV = {
+    "BGGR": cv2.COLOR_BayerBG2BGR,
+    "RGGB": cv2.COLOR_BayerRG2BGR,
+    "GBRG": cv2.COLOR_BayerGB2BGR,
+    "GRBG": cv2.COLOR_BayerGR2BGR,
+}
 
 
 def _is_fits_path(path: str) -> bool:
@@ -8538,6 +8845,36 @@ def _is_fits_path(path: str) -> bool:
 
 def _is_supported_image_path(path: str) -> bool:
     return os.path.isfile(path) and os.path.splitext(path)[1].lower() in IMAGE_EXTENSIONS
+
+
+def normalize_bayer_pattern(pattern: str) -> str:
+    value = str(pattern or "").strip().upper()
+    if value in BAYER_PATTERN_TO_OPENCV:
+        return value
+    if value in ("", "AUTO", "NONE", "OFF", "MONO"):
+        return ""
+    aliases = {
+        "BG": "BGGR",
+        "RG": "RGGB",
+        "GB": "GBRG",
+        "GR": "GRBG",
+    }
+    return aliases.get(value, "")
+
+
+def extract_bayer_pattern_from_fits_header(header) -> str:
+    if header is None:
+        return ""
+    keys = ("BAYERPAT", "BAYERPATN", "BAYER", "CFA", "CFAPAT")
+    for key in keys:
+        try:
+            candidate = header.get(key)
+        except Exception:
+            candidate = None
+        pattern = normalize_bayer_pattern(candidate)
+        if pattern:
+            return pattern
+    return ""
 
 
 def image_paths_from_mime_data(mime_data):
@@ -8550,7 +8887,7 @@ def image_paths_from_mime_data(mime_data):
     ]
 
 
-def safe_fits_read(path: str):
+def safe_fits_read_with_header(path: str):
     try:
         from astropy.io import fits
     except ImportError:
@@ -8558,9 +8895,11 @@ def safe_fits_read(path: str):
 
     with fits.open(path, memmap=False) as hdul:
         data = None
+        header = None
         for hdu in hdul:
             if getattr(hdu, 'data', None) is not None:
                 data = hdu.data
+                header = getattr(hdu, "header", None)
                 break
         if data is None:
             raise RuntimeError("No image data found in FITS file.")
@@ -8580,7 +8919,12 @@ def safe_fits_read(path: str):
         if data.ndim == 3 and data.shape[2] in (3, 4):
             data = data[..., ::-1]
 
-        return data
+        return data, header
+
+
+def safe_fits_read(path: str):
+    data, _header = safe_fits_read_with_header(path)
+    return data
 
 
 def safe_imread(path: str):
@@ -8593,6 +8937,45 @@ def safe_imread(path: str):
     img_array = np.frombuffer(data, np.uint8)
     img = cv2.imdecode(img_array, cv2.IMREAD_ANYDEPTH | cv2.IMREAD_ANYCOLOR)
     return img
+
+
+def normalize_to_uint8_gray(img: np.ndarray) -> np.ndarray:
+    if img is None:
+        return None
+
+    arr = np.array(img, copy=False)
+    if arr.ndim == 3 and arr.shape[2] in (3, 4):
+        arr = normalize_to_uint8_bgr(arr)
+        arr = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
+        return arr
+    if arr.ndim != 2:
+        raise ValueError("Expected 2D frame for grayscale normalization.")
+
+    if arr.dtype != np.uint8:
+        arr = arr.astype(np.float32)
+        arr -= arr.min()
+        max_val = float(arr.max())
+        if max_val > 0.0:
+            arr /= max_val
+        arr = (arr * 255.0).astype(np.uint8)
+    else:
+        arr = arr.copy()
+    return arr
+
+
+def debayer_bayer_frame(cfa_frame: np.ndarray, pattern: str) -> np.ndarray:
+    normalized_pattern = normalize_bayer_pattern(pattern)
+    if not normalized_pattern:
+        raise ValueError("Bayer pattern is required for debayer conversion.")
+    if cfa_frame is None or cfa_frame.ndim != 2:
+        raise ValueError("Debayer input must be a single-channel (2D) frame.")
+
+    if cfa_frame.dtype not in (np.uint8, np.uint16):
+        source = normalize_to_uint8_gray(cfa_frame)
+    else:
+        source = np.array(cfa_frame, copy=True)
+
+    return cv2.cvtColor(source, BAYER_PATTERN_TO_OPENCV[normalized_pattern])
 
 
 def safe_fits_write(path: str, img: np.ndarray) -> bool:
@@ -14630,6 +15013,8 @@ class AstroApp(QMainWindow):
         self.stack_method = "median"
         self.stack_align_frames = True
         self.stack_use_calibration = False
+        self.stack_bayer_pattern = "AUTO"
+        self.stack_input_paths = []
         self.starnet_stride = 16
 
         # ---------- theme ----------
@@ -14825,13 +15210,17 @@ class AstroApp(QMainWindow):
                 method=getattr(self, "stack_method", "median"),
                 align_frames=bool(getattr(self, "stack_align_frames", True)),
                 use_calibration=bool(getattr(self, "stack_use_calibration", False)),
+                bayer_pattern=getattr(self, "stack_bayer_pattern", "AUTO"),
+                selected_files=getattr(self, "stack_input_paths", []),
             )
         else:
             self.stack_dialog.set_parameters(
                 method=getattr(self, "stack_method", "median"),
                 align_frames=bool(getattr(self, "stack_align_frames", True)),
                 use_calibration=bool(getattr(self, "stack_use_calibration", False)),
+                bayer_pattern=getattr(self, "stack_bayer_pattern", "AUTO"),
             )
+            self.stack_dialog.set_selected_files(getattr(self, "stack_input_paths", []))
         return self.stack_dialog
 
     def _get_fly3d_dialog(self):
@@ -15446,56 +15835,74 @@ class AstroApp(QMainWindow):
             return
 
         source = self.magic_img.copy()
+
+        def _mtf(m: float, values: np.ndarray) -> np.ndarray:
+            m = float(np.clip(m, 1e-4, 1.0 - 1e-4))
+            x = np.clip(values, 0.0, 1.0)
+            denom = ((2.0 * m - 1.0) * x) - m
+            denom = np.where(np.abs(denom) < 1e-6, 1e-6, denom)
+            return np.clip(((m - 1.0) * x) / denom, 0.0, 1.0)
+
+        def _solve_mtf_midtones(x_value: float, target: float) -> float:
+            x = float(np.clip(x_value, 1e-4, 1.0 - 1e-4))
+            t = float(np.clip(target, 1e-4, 1.0 - 1e-4))
+            denom = (2.0 * t * x) - t - x
+            if abs(denom) <= 1e-6:
+                return 0.5
+            m = (t * x - x) / denom
+            return float(np.clip(m, 0.01, 0.99))
+
         profiles = {
-            "weak": (1.0, 99.6, 0.95),
-            "medium": (1.0, 99.5, 0.85),
-            "strong": (0.5, 99.7, 0.70),
+            "weak": {"shadows_clip": 2.2, "target_bg": 0.30},
+            "medium": {"shadows_clip": 2.8, "target_bg": 0.25},
+            "strong": {"shadows_clip": 3.4, "target_bg": 0.20},
         }
         selected_mode = str(mode or "auto").strip().lower()
         if selected_mode == "linear":
             result = source.copy()
         else:
             if selected_mode in profiles:
-                low_pct, high_pct, gamma = profiles[selected_mode]
+                profile = dict(profiles[selected_mode])
             else:
                 selected_mode = "auto"
-                low_pct, high_pct, gamma = 1.0, 99.5, 0.85
+                profile = {"shadows_clip": 2.6, "target_bg": 0.26}
 
             work = source.astype(np.float32)
             if selected_mode == "auto":
-                std_value = float(np.std(work))
-                if std_value < 8.0:
-                    gamma = 0.65
-                    low_pct = 0.5
-                    high_pct = 99.8
-                elif std_value < 20.0:
-                    gamma = 0.75
-                    low_pct = 0.8
-                    high_pct = 99.7
-                elif std_value < 35.0:
-                    gamma = 0.80
-                    low_pct = 1.0
-                    high_pct = 99.6
+                gray = work if work.ndim == 2 else cv2.cvtColor(work.astype(np.uint8), cv2.COLOR_BGR2GRAY).astype(np.float32)
+                med_norm = float(np.median(gray) / 255.0)
+                if med_norm < 0.06:
+                    profile = {"shadows_clip": 3.0, "target_bg": 0.22}
+                elif med_norm < 0.12:
+                    profile = {"shadows_clip": 2.8, "target_bg": 0.24}
+                elif med_norm < 0.20:
+                    profile = {"shadows_clip": 2.5, "target_bg": 0.27}
+                else:
+                    profile = {"shadows_clip": 2.2, "target_bg": 0.30}
 
-            if work.ndim == 2:
-                low = float(np.percentile(work, low_pct))
-                high = float(np.percentile(work, high_pct))
-                if high <= low + 1e-6:
-                    self.log("AutoStretch skipped: image dynamic range is too small.", "warning")
-                    return
-                norm = np.clip((work - low) / (high - low), 0.0, 1.0)
-                stretched = np.power(norm, gamma)
-                result = np.clip(stretched * 255.0, 0, 255).astype(np.uint8)
+            gray = work if work.ndim == 2 else cv2.cvtColor(work.astype(np.uint8), cv2.COLOR_BGR2GRAY).astype(np.float32)
+            median_val = float(np.median(gray))
+            mad = float(np.median(np.abs(gray - median_val)))
+            sigma = max(1e-6, 1.4826 * mad)
+            black_point = median_val - float(profile["shadows_clip"]) * sigma
+            c0 = float(np.clip(black_point / 255.0, 0.0, 0.92))
+            median_norm = float(np.clip(median_val / 255.0, 0.0, 1.0))
+
+            if median_norm <= c0 + 1e-5:
+                mid_input = float(np.clip(c0 + 0.02, 1e-4, 0.98))
             else:
-                low = np.percentile(work, low_pct, axis=(0, 1), keepdims=True)
-                high = np.percentile(work, high_pct, axis=(0, 1), keepdims=True)
-                denom = np.maximum(high - low, 1e-6)
-                if float(np.max(denom)) <= 1e-6:
-                    self.log("AutoStretch skipped: image dynamic range is too small.", "warning")
-                    return
-                norm = np.clip((work - low) / denom, 0.0, 1.0)
-                stretched = np.power(norm, gamma)
-                result = np.clip(stretched * 255.0, 0, 255).astype(np.uint8)
+                mid_input = float(np.clip((median_norm - c0) / max(1e-6, 1.0 - c0), 1e-4, 0.99))
+
+            midtones = _solve_mtf_midtones(mid_input, float(profile["target_bg"]))
+
+            norm = np.clip((work / 255.0 - c0) / max(1e-6, 1.0 - c0), 0.0, 1.0)
+            stretched = _mtf(midtones, norm)
+
+            highlight_mix = np.clip((norm - 0.80) / 0.20, 0.0, 1.0)
+            highlight_mix = highlight_mix * highlight_mix * (3.0 - 2.0 * highlight_mix)
+            stretched = stretched * (1.0 - highlight_mix) + norm * highlight_mix
+
+            result = np.clip(stretched * 255.0, 0, 255).astype(np.uint8)
 
         mode_label = {
             "linear": "Linear Stretch",
@@ -17580,77 +17987,185 @@ class AstroApp(QMainWindow):
         self.log(f"Mosaic ready: {len(frames)} frames stitched ({used_mode}).", "success")
 
     def create_stack_from_frames(self):
-        paths, _ = self._show_open_files_dialog(
-            "Wybierz klatki do stackowania",
-            "Obrazy (*.png *.jpg *.jpeg *.tif *.tiff *.fits *.fit *.fts);;Wszystkie pliki (*)",
-            "",
-        )
-        paths = [str(path or "").strip() for path in (paths or []) if str(path or "").strip()]
-        if not paths:
-            self.log("Stacking canceled.", "warning")
-            return
-        if len(paths) < 2:
-            self.log("Stacking needs at least 2 frames.", "warning")
-            return
-
         dialog = self._get_stack_dialog()
         if dialog.exec_() != QDialog.Accepted:
             self.log("Stacking canceled.", "warning")
+            return
+        paths = [str(path or "").strip() for path in (dialog.get_selected_files() or []) if str(path or "").strip()]
+        self.stack_input_paths = list(paths)
+        if not paths:
+            self.log("Stacking canceled: no frames selected.", "warning")
+            return
+        if len(paths) < 2:
+            self.log("Stacking needs at least 2 frames.", "warning")
             return
         params = dialog.get_parameters()
         method_key = str(params.get("method") or "median").strip().lower()
         method_key = "average" if method_key == "average" else "median"
         align_frames = bool(params.get("align_frames", True))
         use_calibration = bool(params.get("use_calibration", False))
+        bayer_pattern = str(params.get("bayer_pattern") or "AUTO").strip().upper()
         self.stack_method = method_key
         self.stack_align_frames = align_frames
         self.stack_use_calibration = use_calibration
+        self.stack_bayer_pattern = bayer_pattern
+
+        stack_progress_dialog = MagicProgressDialog(self)
+        stack_progress_dialog.setWindowTitle("Stacking Progress")
+        stack_progress_dialog.set_current_indeterminate(True, "Initializing stacking pipeline...")
+        stack_progress_dialog.update_progress("Preparing stacking...", 1, 0)
+        stack_progress_dialog.show()
+        QApplication.processEvents()
+
+        def _stack_progress(
+            stage_name: str,
+            overall_value: int,
+            current_value: int = 0,
+            current_text: str = "",
+            indeterminate: bool = None,
+            visual_stage: str = "",
+        ):
+            if visual_stage:
+                stack_progress_dialog.set_visual_stage(visual_stage)
+            if indeterminate is not None:
+                stack_progress_dialog.set_current_indeterminate(bool(indeterminate), current_text)
+            elif current_text:
+                stack_progress_dialog.label_current.setText(current_text)
+            stack_progress_dialog.update_progress(stage_name, int(overall_value), int(current_value))
+
+        forced_bayer_pattern = normalize_bayer_pattern(bayer_pattern)
 
         frames = []
+        frame_bayer_patterns = []
         invalid_paths = []
         mismatched_paths = []
 
         reference_shape = None
-        for path in paths:
+        reference_ndim = None
+
+        def _load_frame_with_pattern(path: str):
+            if _is_fits_path(path):
+                frame_raw, header = safe_fits_read_with_header(path)
+                detected_pattern = extract_bayer_pattern_from_fits_header(header)
+            else:
+                frame_raw = safe_imread(path)
+                detected_pattern = ""
+
+            if frame_raw is None or getattr(frame_raw, "size", 0) == 0:
+                raise RuntimeError("empty frame")
+
+            if frame_raw.ndim == 2:
+                frame_u8 = normalize_to_uint8_gray(frame_raw)
+                pattern = forced_bayer_pattern or detected_pattern
+                return frame_u8, pattern
+
+            if frame_raw.ndim == 3:
+                frame_u8 = normalize_to_uint8_bgr(frame_raw)
+                return frame_u8, ""
+
+            raise RuntimeError(f"unsupported frame dimensions: {frame_raw.shape}")
+
+        _stack_progress("Loading frames...", 4, 0, "Reading input frames...", indeterminate=False, visual_stage="loading")
+        total_paths = max(1, len(paths))
+        for idx, path in enumerate(paths, start=1):
             try:
-                frame = normalize_to_uint8_bgr(safe_imread(path))
+                frame, detected_pattern = _load_frame_with_pattern(path)
                 if frame is None or frame.size == 0:
                     raise RuntimeError("empty frame")
                 if reference_shape is None:
                     reference_shape = frame.shape[:2]
+                    reference_ndim = frame.ndim
                 if frame.shape[:2] != reference_shape:
                     mismatched_paths.append(path)
                     continue
+                if frame.ndim != reference_ndim:
+                    mismatched_paths.append(path)
+                    continue
                 frames.append(frame)
+                frame_bayer_patterns.append(detected_pattern)
             except Exception:
                 invalid_paths.append(path)
+            load_pct = int(round(idx * 100.0 / total_paths))
+            overall = 4 + int(round(load_pct * 0.20))
+            _stack_progress("Loading frames...", overall, load_pct, f"Frame {idx}/{total_paths}", visual_stage="loading")
 
         if len(frames) < 2:
+            stack_progress_dialog.close()
             self.log("Stacking failed: not enough valid frames with matching dimensions.", "error")
             return
 
+        all_single_channel = all(frame.ndim == 2 for frame in frames)
+        cfa_mode = all_single_channel and any(bool(pattern) for pattern in frame_bayer_patterns)
+        common_bayer_pattern = ""
+        if cfa_mode:
+            pattern_candidates = [pattern for pattern in frame_bayer_patterns if pattern]
+            common_bayer_pattern = pattern_candidates[0] if pattern_candidates else ""
+            if not common_bayer_pattern:
+                cfa_mode = False
+            else:
+                inconsistent = [p for p in pattern_candidates if p != common_bayer_pattern]
+                if inconsistent:
+                    stack_progress_dialog.close()
+                    self.log("Stacking failed: inconsistent Bayer patterns in selected frames.", "error")
+                    return
+                missing_count = sum(1 for pattern in frame_bayer_patterns if not pattern)
+                if missing_count > 0:
+                    self.log(
+                        f"Bayer pattern inferred as {common_bayer_pattern} for {missing_count} frame(s) without metadata.",
+                        "warning",
+                    )
+                self.log(f"CFA pipeline active. Debayer pattern: {common_bayer_pattern}.", "info")
+
         calibration_filter = "Obrazy (*.png *.jpg *.jpeg *.tif *.tiff *.fits *.fit *.fts);;Wszystkie pliki (*)"
 
-        def _build_master_frame(file_paths, label):
+        def _build_master_frame(file_paths, label, overall_start: int, overall_span: int):
             selected = [str(path or "").strip() for path in (file_paths or []) if str(path or "").strip()]
             if not selected:
                 return None, 0, 0
             valid = []
             bad_count = 0
-            for path in selected:
+            total_selected = max(1, len(selected))
+            _stack_progress(
+                f"Building master {label}...",
+                overall_start,
+                0,
+                f"Master {label}: loading...",
+                indeterminate=False,
+                visual_stage="calibration",
+            )
+            for idx, path in enumerate(selected, start=1):
                 try:
-                    frame = normalize_to_uint8_bgr(safe_imread(path))
+                    frame, _detected_pattern = _load_frame_with_pattern(path)
                     if frame is None or frame.size == 0:
                         raise RuntimeError("empty frame")
                     if frame.shape[:2] != reference_shape:
                         bad_count += 1
                         continue
+                    if frame.ndim != reference_ndim:
+                        bad_count += 1
+                        continue
                     valid.append(frame.astype(np.float32))
                 except Exception:
                     bad_count += 1
+                pct = int(round(idx * 100.0 / total_selected))
+                overall = overall_start + int(round((pct / 100.0) * max(0, overall_span)))
+                _stack_progress(
+                    f"Building master {label}...",
+                    overall,
+                    pct,
+                    f"Master {label}: frame {idx}/{total_selected}",
+                    visual_stage="calibration",
+                )
             if not valid:
                 self.log(f"No valid {label} frames loaded.", "warning")
                 return None, 0, bad_count
+            _stack_progress(
+                f"Building master {label}...",
+                overall_start + max(0, overall_span),
+                100,
+                f"Master {label}: done",
+                visual_stage="calibration",
+            )
             master = np.median(np.stack(valid, axis=0), axis=0)
             self.log(f"Master {label}: {len(valid)} frame(s).", "info")
             return master, len(valid), bad_count
@@ -17661,6 +18176,14 @@ class AstroApp(QMainWindow):
         flat_norm = None
 
         if use_calibration:
+            _stack_progress(
+                "Selecting calibration frames...",
+                28,
+                0,
+                "Choose optional BIAS/DARK/FLAT sets.",
+                indeterminate=True,
+                visual_stage="calibration",
+            )
             bias_paths, _ = self._show_open_files_dialog(
                 "Wybierz klatki BIAS (opcjonalnie)",
                 calibration_filter,
@@ -17677,9 +18200,9 @@ class AstroApp(QMainWindow):
                 "",
             )
 
-            master_bias, _bias_ok, bias_bad = _build_master_frame(bias_paths, "bias")
-            master_dark, _dark_ok, dark_bad = _build_master_frame(dark_paths, "dark")
-            master_flat, _flat_ok, flat_bad = _build_master_frame(flat_paths, "flat")
+            master_bias, _bias_ok, bias_bad = _build_master_frame(bias_paths, "bias", 30, 8)
+            master_dark, _dark_ok, dark_bad = _build_master_frame(dark_paths, "dark", 38, 8)
+            master_flat, _flat_ok, flat_bad = _build_master_frame(flat_paths, "flat", 46, 8)
 
             if bias_bad > 0:
                 self.log(f"Skipped invalid bias frames: {bias_bad}", "warning")
@@ -17702,6 +18225,8 @@ class AstroApp(QMainWindow):
 
             if master_bias is None and master_dark is None and flat_norm is None:
                 self.log("Calibration requested, but no valid calibration frames were selected.", "warning")
+        else:
+            _stack_progress("Calibration step", 55, 100, "Calibration skipped.", indeterminate=False, visual_stage="calibration")
 
         def _calibrate_light(frame_u8: np.ndarray) -> np.ndarray:
             calibrated = frame_u8.astype(np.float32)
@@ -17714,14 +18239,47 @@ class AstroApp(QMainWindow):
             return np.clip(calibrated, 0.0, 255.0).astype(np.uint8)
 
         if master_bias is not None or master_dark is not None or flat_norm is not None:
-            frames = [_calibrate_light(frame) for frame in frames]
+            calibrated_frames = []
+            total_frames = max(1, len(frames))
+            _stack_progress("Applying calibration...", 56, 0, "Calibrating light frames...", indeterminate=False, visual_stage="calibration")
+            for idx, frame in enumerate(frames, start=1):
+                calibrated_frames.append(_calibrate_light(frame))
+                pct = int(round(idx * 100.0 / total_frames))
+                overall = 56 + int(round(pct * 0.06))
+                _stack_progress("Applying calibration...", overall, pct, f"Calibrated frame {idx}/{total_frames}", visual_stage="calibration")
+            frames = calibrated_frames
+
+        if cfa_mode and common_bayer_pattern:
+            debayer_failures = 0
+            debayered_frames = []
+            total_frames = max(1, len(frames))
+            _stack_progress("Debayering CFA frames...", 63, 0, "Converting Bayer mosaic to RGB...", indeterminate=False, visual_stage="debayer")
+            for idx, frame in enumerate(frames, start=1):
+                try:
+                    debayered = debayer_bayer_frame(frame, common_bayer_pattern)
+                    debayered_frames.append(debayered)
+                except Exception:
+                    debayer_failures += 1
+                    debayered_frames.append(cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR))
+                pct = int(round(idx * 100.0 / total_frames))
+                overall = 63 + int(round(pct * 0.07))
+                _stack_progress("Debayering CFA frames...", overall, pct, f"Debayer frame {idx}/{total_frames}", visual_stage="debayer")
+            frames = debayered_frames
+            if debayer_failures > 0:
+                self.log(f"Debayer fallback used for {debayer_failures} frame(s).", "warning")
+        elif all(frame.ndim == 2 for frame in frames):
+            _stack_progress("Converting mono frames...", 69, 0, "Preparing grayscale frames...", indeterminate=False, visual_stage="debayer")
+            frames = [cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR) for frame in frames]
+            _stack_progress("Converting mono frames...", 70, 100, "Mono conversion complete", visual_stage="debayer")
 
         frame_stack = [frames[0].astype(np.float32)]
         alignment_failures = 0
 
         if align_frames:
             ref_gray = cv2.cvtColor(frames[0], cv2.COLOR_BGR2GRAY).astype(np.float32)
-            for frame in frames[1:]:
+            total_align = max(1, len(frames) - 1)
+            _stack_progress("Aligning frames...", 72, 0, "Registering frames...", indeterminate=False, visual_stage="align")
+            for idx, frame in enumerate(frames[1:], start=1):
                 try:
                     current_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
                     shift, _response = cv2.phaseCorrelate(ref_gray, current_gray)
@@ -17739,15 +18297,21 @@ class AstroApp(QMainWindow):
                 except Exception:
                     frame_stack.append(frame.astype(np.float32))
                     alignment_failures += 1
+                pct = int(round(idx * 100.0 / total_align))
+                overall = 72 + int(round(pct * 0.18))
+                _stack_progress("Aligning frames...", overall, pct, f"Aligned frame {idx}/{total_align}", visual_stage="align")
         else:
+            _stack_progress("Aligning frames...", 72, 100, "Alignment disabled.", indeterminate=False, visual_stage="align")
             frame_stack.extend(frame.astype(np.float32) for frame in frames[1:])
 
+        _stack_progress("Stacking frames...", 92, 0, "Computing final stack...", indeterminate=True, visual_stage="stacking")
         cube = np.stack(frame_stack, axis=0)
         if method_key == "median":
             stacked = np.median(cube, axis=0)
         else:
             stacked = np.mean(cube, axis=0)
         stacked = np.clip(stacked, 0, 255).astype(np.uint8)
+        _stack_progress("Stacking frames...", 97, 100, "Finalizing output", indeterminate=False, visual_stage="stacking")
 
         self.magic_img = stacked
         self.original_img = stacked.copy()
@@ -17770,6 +18334,9 @@ class AstroApp(QMainWindow):
         self.viewer.set_before(np_to_qpixmap(self.processed_img))
         self.update_menu_actions()
         self.apply_full_processing()
+
+        _stack_progress("Stack finished", 100, 100, "Done", indeterminate=False, visual_stage="finished")
+        stack_progress_dialog.close()
 
         self.add_thumbnail(f"Stack ({len(frame_stack)} frames)", self.processed_img)
         mode_name = "median" if method_key == "median" else "average"
