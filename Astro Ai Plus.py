@@ -1,6 +1,7 @@
 ﻿import sys
 import os
 import json
+import ast
 import html
 import shutil
 import subprocess
@@ -13,12 +14,14 @@ import importlib
 from dataclasses import dataclass
 from pathlib import Path
 import socket
+import struct
 import urllib.request
 import urllib.parse
 import urllib.error
 from datetime import datetime, timedelta, timezone
 import numpy as np
 import cv2
+from processing.color_processor import ColorProcessor
 
 try:
     sep = importlib.import_module("sep")
@@ -102,6 +105,86 @@ def neutralize_background(image: np.ndarray, roi: tuple) -> np.ndarray:
     gains = target / (channel_means + eps)
     balanced = image * gains.reshape(1, 1, 3)
     return np.clip(balanced, 0.0, 1.0).astype(np.float32, copy=False)
+
+
+def _smoothstep(edge0: float, edge1: float, x: np.ndarray) -> np.ndarray:
+    width = max(1e-6, float(edge1) - float(edge0))
+    t = np.clip((x - float(edge0)) / width, 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _normalize_mask01(mask: np.ndarray | None, shape_hw: tuple[int, int], dtype: np.dtype) -> np.ndarray | None:
+    if mask is None:
+        return None
+    arr = np.asarray(mask)
+    if arr.size == 0:
+        return None
+    if arr.ndim == 3:
+        arr = arr[:, :, 0]
+
+    arr_f = arr.astype(np.float32, copy=False)
+    if np.issubdtype(arr.dtype, np.integer):
+        info = np.iinfo(arr.dtype)
+        max_val = float(max(1, info.max))
+        arr_f = arr_f / max_val
+
+    arr_f = np.clip(arr_f, 0.0, 1.0)
+    h, w = shape_hw
+    if arr_f.shape[:2] != (h, w):
+        arr_f = cv2.resize(arr_f, (w, h), interpolation=cv2.INTER_LINEAR)
+    return np.clip(arr_f, 0.0, 1.0).astype(dtype, copy=False)
+
+
+def local_contrast_enhancement(
+    image: np.ndarray,
+    radius_px: float = 35.0,
+    strength: float = 0.4,
+    protect_background: bool = True,
+    protect_stars: bool = True,
+    star_mask: np.ndarray | None = None,
+    low_threshold: float = 0.03,
+    high_threshold: float = 0.15,
+) -> np.ndarray:
+    if not isinstance(image, np.ndarray):
+        raise TypeError("image must be a NumPy array")
+    if image.ndim not in (2, 3):
+        raise ValueError("image must be mono (H,W) or RGB/BGR (H,W,C)")
+    if image.dtype not in (np.float32, np.float64):
+        raise ValueError("image must be float32 or float64")
+
+    src = np.clip(image, 0.0, 1.0).astype(image.dtype, copy=False)
+    sigma = float(np.clip(radius_px, 0.1, 300.0))
+    gain = float(np.clip(strength, 0.0, 2.0))
+
+    blur = cv2.GaussianBlur(src, (0, 0), sigmaX=sigma, sigmaY=sigma, borderType=cv2.BORDER_REPLICATE)
+    detail = src - blur
+    enhanced = src + detail * gain
+
+    if bool(protect_background):
+        if src.ndim == 3 and src.shape[2] >= 3:
+            luminance = (
+                src[:, :, 0] * 0.114
+                + src[:, :, 1] * 0.587
+                + src[:, :, 2] * 0.299
+            )
+        elif src.ndim == 3:
+            luminance = np.mean(src, axis=2)
+        else:
+            luminance = src
+        signal_mask = _smoothstep(float(low_threshold), float(high_threshold), luminance).astype(src.dtype, copy=False)
+        if src.ndim == 3:
+            signal_mask = signal_mask[:, :, np.newaxis]
+        enhanced = src + signal_mask * (enhanced - src)
+
+    if bool(protect_stars):
+        stars = _normalize_mask01(star_mask, src.shape[:2], src.dtype)
+        if stars is not None:
+            inv_stars = 1.0 - stars
+            if src.ndim == 3:
+                inv_stars = inv_stars[:, :, np.newaxis]
+            enhanced = src + inv_stars * (enhanced - src)
+
+    return np.clip(enhanced, 0.0, 1.0).astype(image.dtype, copy=False)
 
 
 def _safe_median_absolute_deviation(values: np.ndarray) -> float:
@@ -474,6 +557,7 @@ except ImportError:
     ONNX_AVAILABLE = False
 
 ONNX_SESSIONS = {}
+STARNET_LINEAR_FLAG_SUPPORT = {}
 
 if sys.platform == "win32":
     try:
@@ -551,19 +635,22 @@ I18N = {
     "action_levels": {"pl": "Poziomy", "en": "Levels"},
     "action_curves": {"pl": "Krzywe (LUT)", "en": "Curves (LUT)"},
     "action_ghs": {"pl": "GHS Stretch", "en": "GHS Stretch"},
-    "action_magic": {"pl": "Magic Filter", "en": "Magic Filter"},
+    "action_magic": {"pl": "Inteligentne odszumianie i ostrzenie", "en": "Magic Filter"},
     "action_shrink": {"pl": "Zmniejsz gwiazdy", "en": "Star Shrink"},
     "action_plate": {"pl": "Plate Solving", "en": "Plate Solving"},
     "action_starnet": {"pl": "Uruchom StarNet++", "en": "Run StarNet++"},
     "action_deepsnr": {"pl": "Uruchom deepSNR", "en": "Run deepSNR"},
     "action_correction": {"pl": "Korekcja", "en": "Correction"},
+    "action_star_correction": {"pl": "Korekcja gwiazd", "en": "Star Correction"},
     "action_color_calibration": {"pl": "Kalibracja kolorów", "en": "Color Calibration"},
     "action_3d_fly": {"pl": "Filtr 3D FLY", "en": "3D FLY Filter"},
     "action_blur": {"pl": "Rozmycie Gaussa", "en": "Gaussian Blur"},
+    "action_local_contrast": {"pl": "Kontrast lokalny", "en": "Local Contrast Enhancement"},
     "action_rotate": {"pl": "Obrót", "en": "Rotate"},
     "action_crop": {"pl": "Kadruj", "en": "Crop"},
     "action_mosaic": {"pl": "Mozaika kadrów", "en": "Frame Mosaic"},
     "action_stack": {"pl": "Stackowanie kadrów", "en": "Frame Stack"},
+    "action_solar_stack": {"pl": "Stackowanie obiektów US", "en": "Planetary Stack"},
     "top_open": {"pl": "Otwórz", "en": "Open"},
     "top_save": {"pl": "Zapisz", "en": "Save"},
     "top_save_as": {"pl": "Zapisz jako", "en": "Save As"},
@@ -583,11 +670,14 @@ I18N = {
     "top_deepsnr": {"pl": "deepSNR", "en": "deepSNR"},
     "top_3d_fly": {"pl": "3D FLY", "en": "3D FLY"},
     "top_blur": {"pl": "Blur", "en": "Blur"},
+    "top_local_contrast": {"pl": "Lokalny", "en": "Local"},
     "top_rotate": {"pl": "Obrót", "en": "Rotate"},
     "top_crop": {"pl": "Kadr", "en": "Crop"},
     "top_mosaic": {"pl": "Mozaika", "en": "Mosaic"},
     "top_stack_frames": {"pl": "Stack", "en": "Stack"},
+    "top_solar_stack": {"pl": "Układ Sł.", "en": "Planetary"},
     "top_correction": {"pl": "Korekcja", "en": "Correction"},
+    "top_star_correction": {"pl": "Gwiazdy", "en": "Stars"},
     "top_color_calibration": {"pl": "Kalibracja", "en": "Calibration"},
     "top_levels": {"pl": "Poziomy", "en": "Levels"},
     "top_curves": {"pl": "Krzywe", "en": "Curves"},
@@ -640,17 +730,20 @@ AUTO_TEXT_MAP = {
     "Menu": {"pl": "Menu", "en": "Menu"},
     "Histogram": {"pl": "Histogram", "en": "Histogram"},
     "AI Assistant": {"pl": "Asystent AI", "en": "AI Assistant"},
-    "Magic Filter": {"pl": "Magic Filter", "en": "Magic Filter"},
+    "Magic Filter": {"pl": "Inteligentne odszumianie i ostrzenie", "en": "Magic Filter"},
     "Star Shrink": {"pl": "Zmniejsz gwiazdy", "en": "Star Shrink"},
     "Plate Solving": {"pl": "Plate Solving", "en": "Plate Solving"},
     "Run StarNet++": {"pl": "Uruchom StarNet++", "en": "Run StarNet++"},
     "Frame Stack": {"pl": "Stackowanie kadrów", "en": "Frame Stack"},
+    "Planetary Stack": {"pl": "Stackowanie obiektów US", "en": "Planetary Stack"},
     "Stack": {"pl": "Stack", "en": "Stack"},
     "3D FLY Filter": {"pl": "Filtr 3D FLY", "en": "3D FLY Filter"},
     "Gaussian Blur": {"pl": "Rozmycie Gaussa", "en": "Gaussian Blur"},
+    "Local Contrast Enhancement": {"pl": "Kontrast lokalny", "en": "Local Contrast Enhancement"},
     "Rotate": {"pl": "Obrót", "en": "Rotate"},
     "Crop": {"pl": "Kadruj", "en": "Crop"},
     "Correction": {"pl": "Korekcja", "en": "Correction"},
+    "Star Correction": {"pl": "Korekcja gwiazd", "en": "Star Correction"},
     "Levels": {"pl": "Poziomy", "en": "Levels"},
     "Curves": {"pl": "Krzywe", "en": "Curves"},
     "Curves (LUT)": {"pl": "Krzywe (LUT)", "en": "Curves (LUT)"},
@@ -741,7 +834,170 @@ def get_safe_file_dialog_options():
     return options
 
 
-def get_dark_palette() -> QPalette:
+def get_runtime_base_dir() -> str:
+    meipass_dir = getattr(sys, "_MEIPASS", "")
+    if meipass_dir and os.path.isdir(meipass_dir):
+        return meipass_dir
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def get_app_icon_path() -> str:
+    base_dir = get_runtime_base_dir()
+    icon_candidates = ("favicon.png", "favicon(1).ico", "favicon.ico", "main_icon.ico")
+    for name in icon_candidates:
+        candidate = os.path.join(base_dir, name)
+        if os.path.exists(candidate):
+            return candidate
+    return ""
+
+
+def ensure_linux_desktop_entry() -> None:
+    if not sys.platform.startswith("linux"):
+        return
+
+    try:
+        desktop_dir = os.path.join(os.path.expanduser("~"), ".local", "share", "applications")
+        icon_dir = os.path.join(os.path.expanduser("~"), ".local", "share", "icons", "hicolor", "256x256", "apps")
+        os.makedirs(desktop_dir, exist_ok=True)
+        os.makedirs(icon_dir, exist_ok=True)
+
+        source_icon = get_app_icon_path()
+        target_icon = os.path.join(icon_dir, "astro-ai-plus.png")
+        if source_icon:
+            if source_icon.lower().endswith(".png"):
+                shutil.copy2(source_icon, target_icon)
+            else:
+                converted = QImage(source_icon)
+                if not converted.isNull():
+                    converted.save(target_icon, "PNG")
+
+        if getattr(sys, "frozen", False):
+            exec_cmd = f'"{sys.executable}"'
+            startup_wm_class = os.path.splitext(os.path.basename(sys.executable))[0]
+        else:
+            exec_cmd = f'python3 "{os.path.abspath(__file__)}"'
+            startup_wm_class = "Astro Ai Plus"
+
+        desktop_entry = "\n".join([
+            "[Desktop Entry]",
+            "Type=Application",
+            "Version=1.0",
+            "Name=Astro Ai Plus",
+            f"Exec={exec_cmd}",
+            f"Icon={target_icon}",
+            "Terminal=false",
+            "StartupNotify=true",
+            f"StartupWMClass={startup_wm_class}",
+            "Categories=Graphics;Science;",
+            "",
+        ])
+        desktop_path = os.path.join(desktop_dir, "astro-ai-plus.desktop")
+        with open(desktop_path, "w", encoding="utf-8") as f:
+            f.write(desktop_entry)
+    except Exception:
+        pass
+
+
+ACCENT_PRESETS = {
+    "Ultra Blue": {
+        "base": "#007acc",
+        "border": "#008cff",
+        "hover": "#0a86d9",
+        "pressed": "#0062a3",
+        "soft": "#d9e8fb",
+        "link": "#4aa3ff",
+    },
+    "Celestron Orange": {
+        "base": "#f47a20",
+        "border": "#ff983e",
+        "hover": "#ff8a2d",
+        "pressed": "#cc5f0e",
+        "soft": "#fde6d2",
+        "link": "#ffb36f",
+    },
+    "SkyWatcher Green": {
+        "base": "#7fcf4f",
+        "border": "#9be06d",
+        "hover": "#8cd95b",
+        "pressed": "#63ac3a",
+        "soft": "#e8f7dc",
+        "link": "#b8ee97",
+    },
+    "ZWO Red": {
+        "base": "#d93a3a",
+        "border": "#ef5a5a",
+        "hover": "#e64949",
+        "pressed": "#b22a2a",
+        "soft": "#f9dddd",
+        "link": "#ff8a8a",
+    },
+    "William Optics Gold": {
+        "base": "#c7a246",
+        "border": "#deb960",
+        "hover": "#d4ae53",
+        "pressed": "#9f7f34",
+        "soft": "#f4ebd2",
+        "link": "#e7cc7b",
+    },
+}
+
+ACCENT_NAME_ALIASES = {
+    "ultra blue": "Ultra Blue",
+    "celestron orange": "Celestron Orange",
+    "skywatcher green": "SkyWatcher Green",
+    "zwo red": "ZWO Red",
+    "william optics gold": "William Optics Gold",
+    "williamm optics gold": "William Optics Gold",
+}
+
+
+def normalize_accent_name(accent_name: str) -> str:
+    normalized = str(accent_name or "").strip().lower()
+    if normalized in ACCENT_NAME_ALIASES:
+        return ACCENT_NAME_ALIASES[normalized]
+    return "Ultra Blue"
+
+
+def get_accent_colors(accent_name: str) -> dict:
+    return ACCENT_PRESETS.get(normalize_accent_name(accent_name), ACCENT_PRESETS["Ultra Blue"])
+
+
+def get_active_accent_colors() -> dict:
+    global_prefs = globals().get("APP_PREFERENCES", {})
+    if isinstance(global_prefs, dict):
+        return get_accent_colors(global_prefs.get("accent_name", "Ultra Blue"))
+    return get_accent_colors("Ultra Blue")
+
+
+def accent_qcolor(role: str, alpha: int = 255) -> QColor:
+    accent = get_active_accent_colors()
+    qcolor = QColor(accent.get(role, accent["base"]))
+    qcolor.setAlpha(max(0, min(255, int(alpha))))
+    return qcolor
+
+
+def _apply_accent_to_stylesheet(base_stylesheet: str, accent_name: str) -> str:
+    accent = get_accent_colors(accent_name)
+    replacements = {
+        "#007acc": accent["base"],
+        "#5b86c5": accent["base"],
+        "#3ea6ff": accent["base"],
+        "#008cff": accent["border"],
+        "#76a3dc": accent["border"],
+        "#58b7ff": accent["border"],
+        "#0a86d9": accent["hover"],
+        "#6a96d6": accent["hover"],
+        "#4b9fe6": accent["hover"],
+        "#0062a3": accent["pressed"],
+        "#4b709f": accent["pressed"],
+        "#2e78b8": accent["pressed"],
+        "#d9e8fb": accent["soft"],
+    }
+    return _replace_theme_tokens(base_stylesheet, replacements)
+
+
+def get_dark_palette(accent_name: str = "Ultra Blue") -> QPalette:
+    accent = get_accent_colors(accent_name)
     palette = QPalette()
     palette.setColor(QPalette.Window, QColor("#1e1e1e"))
     palette.setColor(QPalette.WindowText, QColor("#ffffff"))
@@ -753,16 +1009,22 @@ def get_dark_palette() -> QPalette:
     palette.setColor(QPalette.Button, QColor("#3a3a3a"))
     palette.setColor(QPalette.ButtonText, QColor("#ffffff"))
     palette.setColor(QPalette.BrightText, QColor("#ffffff"))
-    palette.setColor(QPalette.Highlight, QColor("#007acc"))
+    palette.setColor(QPalette.Highlight, QColor(accent["base"]))
     palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
-    palette.setColor(QPalette.Link, QColor("#4aa3ff"))
+    palette.setColor(QPalette.Link, QColor(accent["link"]))
     return palette
 
 
-def apply_theme_application(app, theme_name="Fusion Dark"):
+def apply_theme_application(app, theme_name="Fusion Dark", accent_name=None):
+    if accent_name is None:
+        global_prefs = globals().get("APP_PREFERENCES", {})
+        if isinstance(global_prefs, dict):
+            accent_name = global_prefs.get("accent_name", "Ultra Blue")
+        else:
+            accent_name = "Ultra Blue"
     app.setStyle("Fusion")
-    app.setPalette(get_theme_palette(theme_name))
-    app.setStyleSheet(get_theme_stylesheet(theme_name))
+    app.setPalette(get_theme_palette(theme_name, accent_name))
+    app.setStyleSheet(get_theme_stylesheet(theme_name, accent_name))
 
 
 def apply_dark_application_theme(app):
@@ -855,6 +1117,145 @@ class BlurDialog(QDialog):
         self.spin_sigma.blockSignals(False)
         if emit_preview and self.preview_callback is not None:
             self.preview_callback(self.get_value())
+
+
+class LocalContrastDialog(QDialog):
+    def __init__(self, parent=None, preview_callback=None):
+        super().__init__(parent)
+        apply_dialog_window_flags(self)
+        self.setWindowTitle("Local Contrast Enhancement")
+        self.setMinimumWidth(380)
+        self.preview_callback = preview_callback
+        self.preview_timer = QTimer(self)
+        self.preview_timer.setSingleShot(True)
+        self.preview_timer.timeout.connect(self._emit_preview)
+
+        layout = QVBoxLayout(self)
+        apply_standard_layout_margins(layout)
+
+        self.lbl_radius = QLabel("Radius: 35 px")
+        self.sld_radius = QSlider(Qt.Horizontal)
+        self.sld_radius.setRange(5, 150)
+        self.spin_radius = QSpinBox()
+        self.spin_radius.setRange(5, 150)
+
+        self.lbl_strength = QLabel("Strength: 40%")
+        self.sld_strength = QSlider(Qt.Horizontal)
+        self.sld_strength.setRange(0, 200)
+        self.spin_strength = QSpinBox()
+        self.spin_strength.setRange(0, 200)
+        self.spin_strength.setSuffix("%")
+
+        self.chk_protect_background = QCheckBox("Protect Background")
+        self.chk_protect_stars = QCheckBox("Protect Stars")
+
+        self.sld_radius.blockSignals(True)
+        self.spin_radius.blockSignals(True)
+        self.sld_strength.blockSignals(True)
+        self.spin_strength.blockSignals(True)
+        self.sld_radius.setValue(35)
+        self.spin_radius.setValue(35)
+        self.sld_strength.setValue(40)
+        self.spin_strength.setValue(40)
+        self.chk_protect_background.setChecked(True)
+        self.chk_protect_stars.setChecked(True)
+        self.sld_radius.blockSignals(False)
+        self.spin_radius.blockSignals(False)
+        self.sld_strength.blockSignals(False)
+        self.spin_strength.blockSignals(False)
+
+        radius_row = QGridLayout()
+        radius_row.setHorizontalSpacing(10)
+        radius_row.addWidget(QLabel("Radius"), 0, 0)
+        radius_row.addWidget(self.sld_radius, 0, 1)
+        radius_row.addWidget(self.spin_radius, 0, 2)
+
+        strength_row = QGridLayout()
+        strength_row.setHorizontalSpacing(10)
+        strength_row.addWidget(QLabel("Strength"), 0, 0)
+        strength_row.addWidget(self.sld_strength, 0, 1)
+        strength_row.addWidget(self.spin_strength, 0, 2)
+
+        self.sld_radius.valueChanged.connect(self.spin_radius.setValue)
+        self.spin_radius.valueChanged.connect(self.sld_radius.setValue)
+        self.sld_strength.valueChanged.connect(self.spin_strength.setValue)
+        self.spin_strength.valueChanged.connect(self.sld_strength.setValue)
+
+        self.sld_radius.valueChanged.connect(lambda v: self.lbl_radius.setText(f"Radius: {int(v)} px"))
+        self.sld_strength.valueChanged.connect(lambda v: self.lbl_strength.setText(f"Strength: {int(v)}%"))
+
+        self.sld_radius.valueChanged.connect(self._on_value_changed)
+        self.spin_radius.valueChanged.connect(self._on_value_changed)
+        self.sld_strength.valueChanged.connect(self._on_value_changed)
+        self.spin_strength.valueChanged.connect(self._on_value_changed)
+        self.chk_protect_background.toggled.connect(self._on_value_changed)
+        self.chk_protect_stars.toggled.connect(self._on_value_changed)
+
+        layout.addWidget(self.lbl_radius)
+        layout.addLayout(radius_row)
+        layout.addWidget(self.lbl_strength)
+        layout.addLayout(strength_row)
+        layout.addWidget(self.chk_protect_background)
+        layout.addWidget(self.chk_protect_stars)
+
+        buttons = QHBoxLayout()
+        self.btn_apply = QPushButton("Apply")
+        self.btn_apply.setProperty("accent", True)
+        self.btn_cancel = QPushButton("Cancel")
+        buttons.addWidget(self.btn_apply)
+        buttons.addWidget(self.btn_cancel)
+        layout.addLayout(buttons)
+
+        self.btn_apply.clicked.connect(self.accept)
+        self.btn_cancel.clicked.connect(self.reject)
+
+    def get_values(self) -> dict:
+        return {
+            "radius": float(self.sld_radius.value()),
+            "strength": float(self.sld_strength.value()) / 100.0,
+            "strength_percent": int(self.sld_strength.value()),
+            "protect_background": bool(self.chk_protect_background.isChecked()),
+            "protect_stars": bool(self.chk_protect_stars.isChecked()),
+        }
+
+    def _on_value_changed(self, _value=None):
+        if self.preview_callback is not None:
+            self.preview_timer.start(80)
+
+    def _emit_preview(self):
+        if self.preview_callback is not None:
+            self.preview_callback(self.get_values())
+
+    def set_preview_callback(self, preview_callback):
+        self.preview_callback = preview_callback
+
+    def reset_defaults(self, emit_preview: bool = False):
+        self.sld_radius.blockSignals(True)
+        self.spin_radius.blockSignals(True)
+        self.sld_strength.blockSignals(True)
+        self.spin_strength.blockSignals(True)
+        self.chk_protect_background.blockSignals(True)
+        self.chk_protect_stars.blockSignals(True)
+
+        self.sld_radius.setValue(35)
+        self.spin_radius.setValue(35)
+        self.sld_strength.setValue(40)
+        self.spin_strength.setValue(40)
+        self.chk_protect_background.setChecked(True)
+        self.chk_protect_stars.setChecked(True)
+        self.lbl_radius.setText("Radius: 35 px")
+        self.lbl_strength.setText("Strength: 40%")
+
+        self.sld_radius.blockSignals(False)
+        self.spin_radius.blockSignals(False)
+        self.sld_strength.blockSignals(False)
+        self.spin_strength.blockSignals(False)
+        self.chk_protect_background.blockSignals(False)
+        self.chk_protect_stars.blockSignals(False)
+
+        if emit_preview and self.preview_callback is not None:
+            self.preview_callback(self.get_values())
+
 
 class StarShrinkDialog(QDialog):
     def __init__(self, parent=None, preview_callback=None):
@@ -1150,7 +1551,7 @@ class CircularProgressBar(QWidget):
         painter.setPen(track_pen)
         painter.drawArc(arc_rect, 0, 360 * 16)
 
-        progress_pen = QPen(QColor("#1bff00"))
+        progress_pen = QPen(accent_qcolor("base"))
         progress_pen.setWidthF(ring_width)
         progress_pen.setCosmetic(True)
         progress_pen.setCapStyle(Qt.RoundCap)
@@ -1176,7 +1577,7 @@ class CircularProgressBar(QWidget):
             percent = 0 if span <= 0 else int(round((self._value - self._minimum) * 100.0 / span))
             text = self._format
             text = text.replace("%p", str(percent)).replace("%v", str(self._value)).replace("%m", str(self._maximum))
-            painter.setPen(QPen(QColor("#000000"), 1))
+            painter.setPen(QPen(QColor("#FFFFFF"), 1))
             font = painter.font()
             font.setPointSize(max(9, int(side * 0.24)))
             font.setBold(False)
@@ -1197,7 +1598,7 @@ class StackingProcessWidget(QWidget):
 
     def set_scene(self, scene: str):
         normalized = str(scene or "idle").strip().lower()
-        if normalized not in {"idle", "loading", "calibration", "debayer", "align", "stacking", "finished"}:
+        if normalized not in {"idle", "loading", "calibration", "debayer", "align", "stacking", "starnet", "finished"}:
             normalized = "idle"
         if normalized != self._scene:
             self._scene = normalized
@@ -1209,18 +1610,23 @@ class StackingProcessWidget(QWidget):
 
     def _draw_frame_card(self, painter: QPainter, cx: float, cy: float, w: float, h: float, alpha: int):
         rect = QRectF(cx - w / 2.0, cy - h / 2.0, w, h)
-        fill = QColor(128, 182, 255, max(26, min(210, alpha)))
-        stroke = QColor(214, 232, 255, max(40, min(245, int(alpha * 1.15))))
+        fill = accent_qcolor("base", max(26, min(210, alpha)))
+        stroke = accent_qcolor("border", max(40, min(245, int(alpha * 1.15))))
         painter.setPen(QPen(stroke, 1.0))
         painter.setBrush(fill)
         painter.drawRoundedRect(rect, 5.0, 5.0)
+
+    def _draw_star(self, painter: QPainter, x: float, y: float, size: float, alpha: int):
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(255, 246, 190, max(0, min(255, alpha))))
+        painter.drawEllipse(QPointF(x, y), size, size)
 
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
 
         bg_rect = self.rect().adjusted(1, 1, -1, -1)
-        painter.setPen(QPen(QColor("#38516b"), 1.0))
+        painter.setPen(QPen(accent_qcolor("pressed", 180), 1.0))
         painter.setBrush(QColor("#0f1720"))
         painter.drawRoundedRect(bg_rect, 7.0, 7.0)
 
@@ -1232,7 +1638,7 @@ class StackingProcessWidget(QWidget):
         if self._scene == "finished":
             glow = 0.55 + 0.35 * (0.5 + 0.5 * math.sin(self._phase * 1.8))
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(90, 220, 130, int(90 * glow)))
+            painter.setBrush(accent_qcolor("hover", int(90 * glow)))
             painter.drawEllipse(QPointF(cx, cy), 34.0, 24.0)
             self._draw_frame_card(painter, cx, cy, 72.0, 46.0, 190)
             return
@@ -1276,9 +1682,42 @@ class StackingProcessWidget(QWidget):
             if merge_phase > 0.0:
                 pulse = merge_phase * merge_phase * (3.0 - 2.0 * merge_phase)
                 painter.setPen(Qt.NoPen)
-                painter.setBrush(QColor(160, 230, 255, int(35 + 70 * pulse)))
+                painter.setBrush(accent_qcolor("hover", int(35 + 70 * pulse)))
                 painter.drawEllipse(QPointF(cx, cy), 24.0 + 14.0 * pulse, 16.0 + 9.0 * pulse)
                 self._draw_frame_card(painter, cx, cy, 70.0 + 6.0 * pulse, 44.0 + 3.0 * pulse, int(165 + 65 * pulse))
+            return
+
+        if self._scene == "starnet":
+            left_x = cx - 58.0
+            right_x = cx + 58.0
+            base_y = cy
+            pulse = 0.5 + 0.5 * math.sin(self._phase * 1.7)
+
+            self._draw_frame_card(painter, left_x, base_y, 58.0, 36.0, 165)
+            self._draw_frame_card(painter, right_x, base_y, 58.0, 36.0, int(130 + 70 * pulse))
+
+            beam_pen = QPen(accent_qcolor("hover", int(110 + 100 * pulse)), 1.4)
+            painter.setPen(beam_pen)
+            painter.drawLine(int(left_x + 34.0), int(base_y), int(right_x - 34.0), int(base_y))
+
+            travel = (self._phase % (2.0 * math.pi)) / (2.0 * math.pi)
+            glow_x = (left_x + 34.0) * (1.0 - travel) + (right_x - 34.0) * travel
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(accent_qcolor("border", 200))
+            painter.drawEllipse(QPointF(glow_x, base_y), 3.0, 3.0)
+
+            for i in range(7):
+                ang = self._phase * 1.2 + i * 0.9
+                star_x = left_x - 12.0 + i * 6.0 + math.cos(ang) * 2.5
+                star_y = base_y - 10.0 + math.sin(ang * 1.3) * 7.0
+                alpha = int(70 + 130 * (0.5 + 0.5 * math.sin(self._phase * 2.1 + i * 0.8)))
+                self._draw_star(painter, star_x, star_y, 1.6, alpha)
+
+            for i in range(4):
+                ang = self._phase * 1.6 + i * 1.4
+                star_x = right_x - 8.0 + i * 8.0 + math.cos(ang) * 1.3
+                star_y = base_y - 2.0 + math.sin(ang * 1.4) * 2.5
+                self._draw_star(painter, star_x, star_y, 1.1, int(45 + 60 * pulse))
             return
 
         if self._scene == "align":
@@ -1298,7 +1737,7 @@ class StackingProcessWidget(QWidget):
                 for x in range(6):
                     phase = (x + y) * 0.5
                     pulse = 0.55 + 0.45 * math.sin(self._phase * 2.0 + phase)
-                    color = QColor(170, 210, 255, int(60 + 100 * pulse))
+                    color = accent_qcolor("hover", int(60 + 100 * pulse))
                     painter.setPen(Qt.NoPen)
                     painter.setBrush(color)
                     painter.drawRect(QRectF(start_x + x * tile, start_y + y * tile, tile - 1.5, tile - 1.5))
@@ -1319,7 +1758,7 @@ class StackingProcessWidget(QWidget):
         for i in range(dots):
             pulse = 0.45 + 0.55 * math.sin(self._phase * 2.6 - i * 0.6)
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(170, 205, 245, int(40 + 130 * max(0.0, pulse))))
+            painter.setBrush(accent_qcolor("base", int(40 + 130 * max(0.0, pulse))))
             painter.drawEllipse(QPointF(cx - 38 + i * 19, cy), 4.5, 4.5)
 
 
@@ -2158,7 +2597,14 @@ class CropDialog(QDialog):
 
 
 class StarNetDialog(QDialog):
-    def __init__(self, parent=None, stride: int = 16, starnet_path: str = None, generate_starmask: bool = False):
+    def __init__(
+        self,
+        parent=None,
+        stride: int = 16,
+        starnet_path: str = None,
+        generate_starmask: bool = False,
+        prestretch_linear: bool = False,
+    ):
         super().__init__(parent)
         apply_dialog_window_flags(self)
         self.setWindowTitle("StarNet++ Settings")
@@ -2194,6 +2640,10 @@ class StarNetDialog(QDialog):
         self.check_generate_starmask.setChecked(bool(generate_starmask))
         layout.addWidget(self.check_generate_starmask)
 
+        self.check_prestretch_linear = QCheckBox("PreStrech linear image")
+        self.check_prestretch_linear.setChecked(bool(prestretch_linear))
+        layout.addWidget(self.check_prestretch_linear)
+
         button_layout = QHBoxLayout()
         self.btn_run = QPushButton("Run")
         self.btn_run.setProperty("accent", True)
@@ -2209,11 +2659,19 @@ class StarNetDialog(QDialog):
         return {
             "stride": int(self.spin_stride.value()),
             "generate_starmask": bool(self.check_generate_starmask.isChecked()),
+            "prestretch_linear": bool(self.check_prestretch_linear.isChecked()),
         }
 
-    def set_parameters(self, stride: int, starnet_path: str, generate_starmask: bool = False):
+    def set_parameters(
+        self,
+        stride: int,
+        starnet_path: str,
+        generate_starmask: bool = False,
+        prestretch_linear: bool = False,
+    ):
         self.spin_stride.setValue(int(stride))
         self.check_generate_starmask.setChecked(bool(generate_starmask))
+        self.check_prestretch_linear.setChecked(bool(prestretch_linear))
         self.lbl_executable.setText(
             f"StarNet++ executable: {os.path.basename(starnet_path) if starnet_path else 'Not selected'}"
         )
@@ -2273,11 +2731,12 @@ class DeepSNRDialog(QDialog):
 
 
 class MosaicDialog(QDialog):
-    def __init__(self, parent=None, mode: str = "auto", sort_by_name: bool = True):
+    def __init__(self, parent=None, mode: str = "auto", sort_by_name: bool = True, selected_files=None):
         super().__init__(parent)
         apply_dialog_window_flags(self)
         self.setWindowTitle("Mosaic Settings")
         self.setMinimumWidth(420)
+        self.selected_files = []
 
         layout = QVBoxLayout(self)
         apply_standard_layout_margins(layout)
@@ -2294,6 +2753,17 @@ class MosaicDialog(QDialog):
         self.combo_mode.addItem("SCANS", "scans")
         mode_layout.addWidget(self.combo_mode)
         layout.addLayout(mode_layout)
+
+        layout.addWidget(QLabel("Frame order (top -> bottom / left -> right):"))
+        self.list_files = QListWidget()
+        layout.addWidget(self.list_files)
+
+        order_buttons = QHBoxLayout()
+        self.btn_move_up = QPushButton("Move up")
+        self.btn_move_down = QPushButton("Move down")
+        order_buttons.addWidget(self.btn_move_up)
+        order_buttons.addWidget(self.btn_move_down)
+        layout.addLayout(order_buttons)
 
         self.check_sort = QCheckBox("Sort files by name before stitching")
         self.check_sort.setChecked(bool(sort_by_name))
@@ -2313,7 +2783,11 @@ class MosaicDialog(QDialog):
 
         self.btn_run.clicked.connect(self.accept)
         self.btn_cancel.clicked.connect(self.reject)
+        self.btn_move_up.clicked.connect(self._on_move_up)
+        self.btn_move_down.clicked.connect(self._on_move_down)
+        self.check_sort.toggled.connect(self._update_order_controls_state)
         self.set_parameters(mode, sort_by_name)
+        self.set_selected_files(selected_files or [])
 
     def set_parameters(self, mode: str = "auto", sort_by_name: bool = True):
         wanted = str(mode or "auto").strip().lower()
@@ -2324,11 +2798,59 @@ class MosaicDialog(QDialog):
                 break
         self.combo_mode.setCurrentIndex(idx)
         self.check_sort.setChecked(bool(sort_by_name))
+        self._update_order_controls_state()
+
+    def set_selected_files(self, paths):
+        cleaned = []
+        for path in paths or []:
+            item = str(path or "").strip()
+            if item:
+                cleaned.append(item)
+        self.selected_files = cleaned
+        self._refresh_file_list()
+
+    def get_selected_files(self):
+        return list(self.selected_files)
+
+    def _refresh_file_list(self):
+        self.list_files.clear()
+        for path in self.selected_files:
+            self.list_files.addItem(os.path.basename(path) or path)
+        if self.list_files.count() > 0:
+            self.list_files.setCurrentRow(0)
+
+    def _swap_items(self, first_idx: int, second_idx: int):
+        if first_idx < 0 or second_idx < 0:
+            return
+        if first_idx >= len(self.selected_files) or second_idx >= len(self.selected_files):
+            return
+        self.selected_files[first_idx], self.selected_files[second_idx] = self.selected_files[second_idx], self.selected_files[first_idx]
+        self._refresh_file_list()
+        self.list_files.setCurrentRow(second_idx)
+
+    def _on_move_up(self):
+        idx = self.list_files.currentRow()
+        if idx <= 0:
+            return
+        self._swap_items(idx, idx - 1)
+
+    def _on_move_down(self):
+        idx = self.list_files.currentRow()
+        if idx < 0 or idx >= len(self.selected_files) - 1:
+            return
+        self._swap_items(idx, idx + 1)
+
+    def _update_order_controls_state(self):
+        custom_order = not bool(self.check_sort.isChecked())
+        self.list_files.setEnabled(custom_order)
+        self.btn_move_up.setEnabled(custom_order)
+        self.btn_move_down.setEnabled(custom_order)
 
     def get_parameters(self):
         return {
             "mode": str(self.combo_mode.currentData() or "auto"),
             "sort_by_name": bool(self.check_sort.isChecked()),
+            "ordered_paths": self.get_selected_files(),
         }
 
 
@@ -2546,6 +3068,122 @@ class StackDialog(QDialog):
 
     def _on_clear_files(self):
         self.list_files.clear()
+
+
+class SolarVideoStackDialog(QDialog):
+    def __init__(self, parent=None, method: str = "median", align_frames: bool = True, bayer_pattern: str = "AUTO", source_path: str = ""):
+        super().__init__(parent)
+        apply_dialog_window_flags(self)
+        self.setWindowTitle("Video Stacking (Sun/Planets/Moon)")
+        self.setMinimumWidth(460)
+
+        layout = QVBoxLayout(self)
+        apply_standard_layout_margins(layout)
+
+        info = QLabel(
+            "Workflow: 1) Dodaj video  2) Analizuj  3) Dodaj punkty wyrównania  4) Stack"
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(10)
+
+        grid.addWidget(QLabel("1. Dodaj video:"), 0, 0)
+        source_row = QHBoxLayout()
+        self.edit_source = QLineEdit()
+        self.edit_source.setPlaceholderText("Select .avi or .ser file")
+        self.btn_browse = QPushButton("Browse")
+        source_row.addWidget(self.edit_source, 1)
+        source_row.addWidget(self.btn_browse)
+        grid.addLayout(source_row, 0, 1)
+
+        self.lbl_step2 = QLabel("2. Analizuj (automatycznie po uruchomieniu)")
+        grid.addWidget(self.lbl_step2, 1, 0, 1, 2)
+
+        grid.addWidget(QLabel("4. Metoda stackowania:"), 2, 0)
+        self.combo_method = QComboBox()
+        self.combo_method.addItem("Median", "median")
+        self.combo_method.addItem("Average", "average")
+        grid.addWidget(self.combo_method, 2, 1)
+
+        self.check_align = QCheckBox("3. Dodaj punkty wyrównania (auto align)")
+        grid.addWidget(self.check_align, 3, 0, 1, 2)
+
+        grid.addWidget(QLabel("4. Bayer pattern:"), 4, 0)
+        self.combo_bayer_pattern = QComboBox()
+        self.combo_bayer_pattern.addItem("Auto (from FITS/SER metadata)", "AUTO")
+        self.combo_bayer_pattern.addItem("RGGB", "RGGB")
+        self.combo_bayer_pattern.addItem("BGGR", "BGGR")
+        self.combo_bayer_pattern.addItem("GBRG", "GBRG")
+        self.combo_bayer_pattern.addItem("GRBG", "GRBG")
+        self.combo_bayer_pattern.addItem("None / Mono", "NONE")
+        grid.addWidget(self.combo_bayer_pattern, 4, 1)
+
+        layout.addLayout(grid)
+
+        button_layout = QHBoxLayout()
+        self.btn_run = QPushButton("4. Stack")
+        self.btn_run.setProperty("accent", True)
+        self.btn_cancel = QPushButton("Cancel")
+        button_layout.addWidget(self.btn_run)
+        button_layout.addWidget(self.btn_cancel)
+        layout.addLayout(button_layout)
+
+        self.btn_browse.clicked.connect(self._on_browse)
+        self.btn_run.clicked.connect(self.accept)
+        self.btn_cancel.clicked.connect(self.reject)
+
+        self.set_parameters(method=method, align_frames=align_frames, bayer_pattern=bayer_pattern, source_path=source_path)
+
+    def _video_filter(self) -> str:
+        return "Wideo astronomiczne (*.avi *.ser);;AVI (*.avi);;SER (*.ser);;Wszystkie pliki (*)"
+
+    def _on_browse(self):
+        parent = self.parent()
+        default_dir = os.getcwd()
+        if parent is not None and hasattr(parent, "_get_default_dialog_directory"):
+            try:
+                candidate = str(parent._get_default_dialog_directory() or "").strip()
+                if candidate and os.path.isdir(candidate):
+                    default_dir = candidate
+            except Exception:
+                pass
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Wybierz wideo AVI/SER",
+            default_dir,
+            self._video_filter(),
+            options=get_safe_file_dialog_options(),
+        )
+        if path:
+            self.edit_source.setText(os.path.abspath(path))
+
+    def set_parameters(self, method: str = "median", align_frames: bool = True, bayer_pattern: str = "AUTO", source_path: str = ""):
+        wanted = str(method or "median").strip().lower()
+        idx = 0
+        for i in range(self.combo_method.count()):
+            if str(self.combo_method.itemData(i) or "").strip().lower() == wanted:
+                idx = i
+                break
+        self.combo_method.setCurrentIndex(idx)
+        desired_pattern = normalize_bayer_pattern(bayer_pattern)
+        if not desired_pattern:
+            upper = str(bayer_pattern or "AUTO").strip().upper()
+            desired_pattern = "NONE" if upper in ("NONE", "MONO", "OFF") else "AUTO"
+        pattern_index = max(0, self.combo_bayer_pattern.findData(desired_pattern))
+        self.combo_bayer_pattern.setCurrentIndex(pattern_index)
+        self.check_align.setChecked(bool(align_frames))
+        self.edit_source.setText(str(source_path or "").strip())
+
+    def get_parameters(self):
+        return {
+            "method": str(self.combo_method.currentData() or "median"),
+            "align_frames": bool(self.check_align.isChecked()),
+            "bayer_pattern": str(self.combo_bayer_pattern.currentData() or "AUTO"),
+            "source_path": str(self.edit_source.text() or "").strip(),
+        }
 
 
 class FlyZoneBrushWidget(QWidget):
@@ -4118,10 +4756,13 @@ class Fly3DDialog(QDialog):
                 return
             params = starnet_settings_dialog.get_parameters()
             selected_stride = int(params.get("stride") or 16)
+            selected_prestretch_linear = bool(params.get("prestretch_linear", False))
             if hasattr(self, "spin_starless_stride"):
                 self.spin_starless_stride.setValue(selected_stride)
             if hasattr(app, "starnet_stride"):
                 app.starnet_stride = selected_stride
+            if hasattr(app, "starnet_prestretch_linear"):
+                app.starnet_prestretch_linear = selected_prestretch_linear
 
         original_before_starless = self.source_image.copy()
 
@@ -4134,7 +4775,12 @@ class Fly3DDialog(QDialog):
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            starless, err = run_starnet_sync_for_image(self.source_image.copy(), starnet_path, stride)
+            starless, err = run_starnet_sync_for_image(
+                self.source_image.copy(),
+                starnet_path,
+                stride,
+                prestretch_linear=bool(getattr(app, "starnet_prestretch_linear", False)) if app is not None else False,
+            )
         finally:
             QApplication.restoreOverrideCursor()
 
@@ -6071,32 +6717,49 @@ class AIAssistantPanel(QFrame):
 
         cmd_name, args = parsed
         normalized = cmd_name.lower()
+        parsed_args = self._parse_ase_arguments(args)
+        if parsed_args is None:
+            self.append_assistant_message(f"ASE nieprawidlowy: niepoprawne argumenty w {cmd_name}().")
+            return
 
-        ase_to_console = {
-            "open.curves": "open.curves",
-            "open.levels": "open.levels",
-            "open.histogram": "open.histogram",
-            "open.correction": "open.correction",
-            "open.ghs": "open.ghs",
-            "open.calibration": "open.calibration",
-            "open.console": "open.console",
-            "open.menu": "open.menu",
-            "run.magic": "run.magic",
+        zero_arg_commands = {
+            "help": "help",
+            "open.curves": "curves",
+            "open.levels": "levels",
+            "open.histogram": "histogram",
+            "open.correction": "correction",
+            "open.starcorrection": "star correction",
+            "open.ghs": "ghs",
+            "open.calibration": "calibration",
+            "open.console": "console",
+            "open.menu": "menu",
+            "open.blur": "blur",
+            "open.preferences": "preferences",
+            "open.models": "models",
+            "run.magic": "magic",
             "run.mosaic": "mosaic",
             "run.stack": "stack",
-            "run.starnet": "run.starnet",
-            "run.starnet++": "run.starnet++",
-            "run.deepsnr": "run.deepsnr",
-            "open.blur": "open.blur",
+            "run.solarstack": "solar stack",
+            "run.starnet": "starnet++",
+            "run.starnet++": "starnet++",
+            "run.starshrink": "star shrink",
+            "run.deepsnr": "deepsnr",
+            "run.3dfly": "3d fly",
+            "run.analyze": "analyze",
+            "run.platesolve": "plate solve",
             "save": "save",
             "undo": "undo",
             "redo": "redo",
             "platesolve": "plate solve",
             "platesolving": "plate solve",
             "solveplate": "plate solve",
+            "analyze": "analyze",
+            "analysis": "analysis",
             "blur": "blur",
             "gaussianblur": "gaussian blur",
             "gaussian": "gaussian",
+            "rotate": "rotate",
+            "crop": "crop",
             "levels": "levels",
             "level": "level",
             "menu": "menu",
@@ -6106,10 +6769,13 @@ class AIAssistantPanel(QFrame):
             "lut": "lut",
             "curveslut": "curves lut",
             "curvesreset": "curves reset",
+            "curves.reset": "curves reset",
             "lutreset": "lut reset",
+            "lut.reset": "lut reset",
             "histogram": "histogram",
             "hist": "hist",
             "correction": "correction",
+            "starcorrection": "star correction",
             "correct": "correct",
             "ghs": "ghs",
             "ghsstretch": "ghs stretch",
@@ -6119,29 +6785,70 @@ class AIAssistantPanel(QFrame):
             "cameraraw": "camera raw",
             "reset": "reset",
             "resetsliders": "reset sliders",
+            "preferences": "preferences",
+            "dark": "dark",
+            "darktoggle": "dark toggle",
             "darkon": "dark on",
             "darkoff": "dark off",
             "models": "models",
             "deepsnr": "deepsnr",
             "mosaic": "mosaic",
+            "stack": "stack",
+            "solarstack": "solar stack",
+            "starnet": "starnet++",
+            "starshrink": "star shrink",
+            "autostretch": "autostretch",
             "exit": "exit",
             "quit": "quit",
-            "help": "help",
         }
 
-        if normalized == "saveas":
-            if args:
-                path = self._parse_ase_string(args)
-                if path is not None:
-                    self.app.save_image_to_path(path)
-                else:
-                    self.append_assistant_message("ASE nieprawidĹ‚owy: niepoprawny argument SaveAs().")
-            else:
-                self.app.save_image_as()
+        if normalized in ("open", "load", "open.image", "load.image"):
+            if len(parsed_args) == 0:
+                self.app.execute_console_command("open")
+                return
+            if len(parsed_args) == 1 and isinstance(parsed_args[0], str):
+                path = parsed_args[0].strip()
+                if not path:
+                    self.append_assistant_message("ASE nieprawidlowy: pusty argument Open().")
+                    return
+                self.app.execute_console_command(f'open "{path}"')
+                return
+            self.append_assistant_message("ASE nieprawidlowy: Open() przyjmuje 0 lub 1 argument tekstowy.")
             return
 
-        if normalized in ase_to_console:
-            self.app.execute_console_command(ase_to_console[normalized])
+        if normalized in ("saveas", "save.as"):
+            if len(parsed_args) == 0:
+                self.app.save_image_as()
+                return
+            if len(parsed_args) == 1 and isinstance(parsed_args[0], str):
+                path = parsed_args[0].strip()
+                if not path:
+                    self.append_assistant_message("ASE nieprawidlowy: pusty argument SaveAs().")
+                    return
+                self.app.save_image_to_path(path)
+                return
+            self.append_assistant_message("ASE nieprawidlowy: SaveAs() przyjmuje 0 lub 1 argument tekstowy.")
+            return
+
+        if normalized in ("autostretch", "auto.stretch"):
+            if len(parsed_args) == 0:
+                self.app.execute_console_command("autostretch")
+                return
+            if len(parsed_args) == 1 and isinstance(parsed_args[0], str):
+                mode = parsed_args[0].strip().lower()
+                if mode in {"auto", "linear", "weak", "medium", "strong"}:
+                    self.app.execute_console_command(f"autostretch {mode}")
+                    return
+                self.append_assistant_message("ASE nieprawidlowy: AutoStretch() obsluguje tylko auto/linear/weak/medium/strong.")
+                return
+            self.append_assistant_message("ASE nieprawidlowy: AutoStretch() przyjmuje 0 lub 1 argument tekstowy.")
+            return
+
+        if normalized in zero_arg_commands:
+            if parsed_args:
+                self.append_assistant_message(f"ASE nieprawidlowy: komenda {cmd_name}() nie przyjmuje argumentow.")
+                return
+            self.app.execute_console_command(zero_arg_commands[normalized])
             return
 
         if hasattr(self.app, "_execute_script_line"):
@@ -6157,34 +6864,59 @@ class AIAssistantPanel(QFrame):
         args = match.group(2).strip()
         return name, args
 
-    def _parse_ase_string(self, value: str):
-        if len(value) >= 2 and ((value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")):
-            return value[1:-1]
-        return None
+    def _parse_ase_arguments(self, args: str):
+        raw = str(args or "").strip()
+        if not raw:
+            return []
+        try:
+            parsed = ast.literal_eval(f"({raw})")
+        except Exception:
+            return None
+        if isinstance(parsed, tuple):
+            return list(parsed)
+        return [parsed]
 
     def generate_ase_code(self, message: str, payload: dict) -> str:
         text = message.lower()
         commands = []
+        if any(k in text for k in ("open", "load", "wczytaj", "otworz")):
+            commands.append("Open()")
         if "magic" in text or "denoise" in text or "background" in text:
             commands.append("Run.Magic()")
         if "mosaic" in text or "mozaik" in text or "stitch" in text:
             commands.append("Run.Mosaic()")
         if "stack" in text or "stacking" in text or "stackowanie" in text:
             commands.append("Run.Stack()")
+        if "solar stack" in text or "planetary stack" in text or "sun" in text or "planet" in text or "moon" in text or "księżyc" in text or "ksiezyc" in text:
+            commands.append("Run.SolarStack()")
+        if "analy" in text or "analiz" in text:
+            commands.append("Run.Analyze()")
         if "star" in text and ("remove" in text or "removal" in text or "starnet" in text):
             commands.append("Run.StarNet()")
+        if "star shrink" in text or "zmniejsz" in text:
+            commands.append("Run.StarShrink()")
         if "deepsnr" in text or "deep snr" in text:
             commands.append("Run.DeepSNR()")
+        if "3d" in text and "fly" in text:
+            commands.append("Run.3DFly()")
         if "blur" in text:
             commands.append("Open.Blur()")
+        if "rotate" in text or "obroc" in text:
+            commands.append("Rotate()")
+        if "crop" in text or "kadruj" in text:
+            commands.append("Crop()")
         if "curves" in text or "lut" in text:
             commands.append("Open.Curves()")
         if "levels" in text:
             commands.append("Open.Levels()")
+        if "autostretch" in text or "auto stretch" in text:
+            commands.append("AutoStretch()")
         if "histogram" in text:
             commands.append("Open.Histogram()")
         if "correction" in text or "camera raw" in text:
             commands.append("Open.Correction()")
+        if "star correction" in text or "korekcja gwiazd" in text:
+            commands.append("Open.StarCorrection()")
         if "ghs" in text or "hyperbolic" in text:
             commands.append("Open.GHS()")
         if "calibration" in text:
@@ -6195,35 +6927,53 @@ class AIAssistantPanel(QFrame):
             commands.append("Open.Console()")
         if "menu" in text and "open" in text:
             commands.append("Open.Menu()")
+        if "preferences" in text or "ustawienia" in text:
+            commands.append("Open.Preferences()")
+        if "model" in text:
+            commands.append("Open.Models()")
         if "plate solve" in text or "solve" in text:
-            commands.append("PlateSolve()")
+            commands.append("Run.PlateSolve()")
         if "save" in text and "as" not in text:
             commands.append("Save()")
         if "save as" in text or "save_as" in text:
             commands.append("SaveAs(\"output.tif\")")
+        if "undo" in text:
+            commands.append("Undo()")
+        if "redo" in text:
+            commands.append("Redo()")
         if "reset" in text and "sliders" in text:
-            commands.append("ResetSliders()")
+            commands.append("Reset()")
+        if "curves reset" in text or "lut reset" in text:
+            commands.append("CurvesReset()")
         if "dark on" in text:
             commands.append("DarkOn()")
         if "dark off" in text:
             commands.append("DarkOff()")
-        if "models" in text:
-            commands.append("Models()")
+        if "dark" in text and "on" not in text and "off" not in text:
+            commands.append("Dark()")
+        if "help" in text or "pomoc" in text:
+            commands.append("Help()")
         if not commands:
             return "# unavailable"
         return "\n".join(dict.fromkeys(commands))
 
     def validate_ase_code(self, code: str) -> tuple[bool, str]:
         allowed_commands = {
-            "open.curves", "open.levels", "open.histogram", "open.correction", "open.ghs", "open.calibration",
-            "open.console", "open.menu", "run.magic", "run.mosaic", "run.stack", "run.starnet", "run.starnet++", "run.deepsnr",
-            "open.blur", "save", "saveas", "undo", "redo", "platesolve",
-            "solveplate", "blur", "gaussianblur", "gaussian", "levels", "level",
+            "help",
+            "open", "load", "open.image", "load.image",
+            "open.curves", "open.levels", "open.histogram", "open.correction", "open.starcorrection", "open.ghs", "open.calibration",
+            "open.console", "open.menu", "open.blur", "open.preferences", "open.models",
+            "run.magic", "run.mosaic", "run.stack", "run.solarstack", "run.starnet", "run.starnet++", "run.starshrink", "run.deepsnr", "run.3dfly", "run.analyze", "run.platesolve",
+            "save", "saveas", "save.as", "undo", "redo", "platesolve", "platesolving", "solveplate",
+            "analyze", "analysis", "blur", "gaussianblur", "gaussian", "rotate", "crop", "levels", "level",
             "menu", "console", "curves", "curve", "lut", "curveslut",
-            "curvesreset", "lutreset", "histogram", "hist", "correction", "correct", "ghs", "ghsstretch", "calibration", "bn", "backgroundneutralization",
-            "cameraraw", "reset", "resetsliders", "darkon", "darkoff", "models", "deepsnr",
-            "mosaic", "stack", "exit", "quit", "help"
+            "curvesreset", "curves.reset", "lutreset", "lut.reset", "histogram", "hist", "correction", "starcorrection", "correct", "ghs", "ghsstretch", "calibration", "bn", "backgroundneutralization",
+            "cameraraw", "reset", "resetsliders", "preferences", "dark", "darktoggle", "darkon", "darkoff", "models", "deepsnr",
+            "mosaic", "stack", "solarstack", "starnet", "starshrink", "autostretch", "auto.stretch", "exit", "quit"
         }
+        open_with_optional_path = {"open", "load", "open.image", "load.image"}
+        save_as_with_optional_path = {"saveas", "save.as"}
+        autostretch_with_optional_mode = {"autostretch", "auto.stretch"}
         for raw_line in code.splitlines():
             line = raw_line.strip()
             if not line or line.startswith("#"):
@@ -6235,15 +6985,84 @@ class AIAssistantPanel(QFrame):
             lower_cmd = cmd_name.lower()
             if lower_cmd not in allowed_commands:
                 return False, f"Nieznana komenda ASE: {cmd_name}"
-            if lower_cmd == "saveas":
-                if not args:
+
+            parsed_args = self._parse_ase_arguments(args)
+            if parsed_args is None:
+                return False, f"Niepoprawne argumenty ASE: {cmd_name}({args})"
+
+            if lower_cmd in open_with_optional_path:
+                if not parsed_args:
                     continue
-                if self._parse_ase_string(args) is None:
-                    return False, "NieprawidĹ‚owy argument SaveAs()."
-                continue
-            if args:
-                return False, f"Komenda {cmd_name} nie przyjmuje argumentĂłw." 
+                if len(parsed_args) == 1 and isinstance(parsed_args[0], str) and parsed_args[0].strip():
+                    continue
+                return False, "Open() przyjmuje 0 lub 1 argument tekstowy."
+
+            if lower_cmd in save_as_with_optional_path:
+                if not parsed_args:
+                    continue
+                if len(parsed_args) == 1 and isinstance(parsed_args[0], str) and parsed_args[0].strip():
+                    continue
+                return False, "SaveAs() przyjmuje 0 lub 1 argument tekstowy."
+
+            if lower_cmd in autostretch_with_optional_mode:
+                if not parsed_args:
+                    continue
+                if len(parsed_args) == 1 and isinstance(parsed_args[0], str):
+                    mode = parsed_args[0].strip().lower()
+                    if mode in {"auto", "linear", "weak", "medium", "strong"}:
+                        continue
+                return False, "AutoStretch() obsluguje tylko auto/linear/weak/medium/strong."
+
+            if parsed_args:
+                return False, f"Komenda {cmd_name} nie przyjmuje argumentow."
+
         return True, ""
+
+    def _build_available_ase_commands(self) -> list[str]:
+        return [
+            "Help()",
+            "Open()",
+            "Open(\"/path/to/image.fit\")",
+            "Save()",
+            "SaveAs()",
+            "SaveAs(\"/path/to/output.tif\")",
+            "Undo()",
+            "Redo()",
+            "Run.Magic()",
+            "Run.StarShrink()",
+            "Run.StarNet()",
+            "Run.DeepSNR()",
+            "Run.3DFly()",
+            "Run.Analyze()",
+            "Run.PlateSolve()",
+            "Run.Mosaic()",
+            "Run.Stack()",
+            "Open.Blur()",
+            "Rotate()",
+            "Crop()",
+            "Open.Levels()",
+            "Open.Curves()",
+            "Open.GHS()",
+            "AutoStretch()",
+            "AutoStretch(\"auto|linear|weak|medium|strong\")",
+            "CurvesReset()",
+            "LutReset()",
+            "Open.Histogram()",
+            "Open.Correction()",
+            "Open.StarCorrection()",
+            "BN()",
+            "Open.Calibration()",
+            "Reset()",
+            "Open.Menu()",
+            "Open.Console()",
+            "Open.Preferences()",
+            "Open.Models()",
+            "Dark()",
+            "DarkOn()",
+            "DarkOff()",
+            "Exit()",
+            "Quit()",
+        ]
 
     def get_context_payload(self) -> dict:
         analysis_metrics = {}
@@ -6261,13 +7080,7 @@ class AIAssistantPanel(QFrame):
             "plate_solve_info": self.app.plate_solve_object_info or {},
             "plate_solve_result": self.app.latest_plate_solve_result or {},
             "analysis_metrics": analysis_metrics,
-            "available_ase_commands": [
-                "Open.Curves()", "Open.Levels()", "Open.Histogram()", "Open.Correction()",
-                "Open.Console()", "Open.Menu()", "Run.Magic()", "Run.Mosaic()", "Run.Stack()", "Run.StarNet()", "Run.StarNet++()", "Run.DeepSNR()",
-                "Open.Blur()", "Save()", "SaveAs(\"output.tif\")", "Undo()", "Redo()", "PlateSolve()",
-                "DarkOn()", "DarkOff()", "Models()", "Exit()", "Quit()", "Help()",
-                "Reset()", "ResetSliders()", "CurvesReset()", "LutReset()"
-            ],
+            "available_ase_commands": self._build_available_ase_commands(),
         }
         return payload
 
@@ -6878,7 +7691,15 @@ def build_gemini_system_prompt() -> str:
         "Odpowiadaj krótko i naturalnie po polsku. "
         "Na powitanie daj krótki komunikat bez podsumowywania payload. "
         "Jeśli użytkownik pyta o filtr 3D FLY, najpierw opieraj odpowiedź o lokalną instrukcję 3d_fly_help.md. "
-        "Jeśli użytkownik poprosi o ASE, wygeneruj tylko kod ASE w formie funkcji, używając wyłącznie istniejących poleceń aplikacji."
+        "Jesli uzytkownik prosi o ASE, NIE generuj kodu od razu. "
+        "Najpierw zrob etap uzgodnienia celu: krotko sparafrazuj plan i zadaj pytania doprecyzowujace brakujace dane (sciezki, kolejnosc krokow, wynik, nazwa pliku). "
+        "Dopiero gdy uzytkownik potwierdzi i poda brakujace informacje, wygeneruj ASE. "
+        "Kod ASE zwracaj tylko jako czysty blok komend ASE, bez opisu i bez markdown. "
+        "Uzywaj wylacznie komend z available_ase_commands z payload. "
+        "Nigdy nie wymyslaj nowych komend ani argumentow. "
+        "Przy prosbie o ASE nie zaczynaj od powitania ani zbednego wstepu. Przejdz od razu do konkretu. "
+        "Jesli uzytkownik poda ogolna lokalizacje typu Desktop/Pulpit, podaj od razu gotowy szablon komendy z placeholderem nazwy pliku zamiast blokowac odpowiedz. "
+        "Jesli zadany krok nie ma odpowiednika w available_ase_commands, napisz to wprost i zapytaj o alternatywe zamiast generowac niepoprawny ASE."
     )
     guide = _load_altair_3d_fly_guide_text()
     if not guide:
@@ -7225,7 +8046,68 @@ def _resolve_starnet_command(starnet_path: str = None):
     return None, None, "starnet2"
 
 
-def _build_starnet_command(base_command: list, mode: str, input_path: str, output_path: str, stride: int) -> list:
+def _starnet_supports_linear_flag(base_command: list, command_dir: str = None) -> bool:
+    key = (tuple(str(x) for x in (base_command or [])), str(command_dir or ""))
+    if key in STARNET_LINEAR_FLAG_SUPPORT:
+        return bool(STARNET_LINEAR_FLAG_SUPPORT[key])
+
+    creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    supported = False
+    try:
+        result = subprocess.run(
+            list(base_command or []) + ["--help"],
+            cwd=command_dir,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=8,
+            creationflags=creationflags,
+        )
+        help_text = f"{result.stdout or ''}\n{result.stderr or ''}".lower()
+        supported = ("-linear" in help_text) or ("--linear" in help_text)
+    except Exception:
+        supported = False
+
+    STARNET_LINEAR_FLAG_SUPPORT[key] = bool(supported)
+    return bool(supported)
+
+
+def _prepare_starnet_linear_fallback_input(img: np.ndarray, strength: float = 12.0) -> tuple[np.ndarray, dict]:
+    normalized = normalize_to_uint8_bgr(img)
+    if normalized is None:
+        return None, {}
+    x = np.clip(normalized.astype(np.float32) / 255.0, 0.0, 1.0)
+    k = max(1e-3, float(strength))
+    denom = float(np.arcsinh(k))
+    y = np.arcsinh(x * k) / max(1e-6, denom)
+    stretched_u16 = np.clip(np.round(y * 65535.0), 0, 65535).astype(np.uint16)
+    return stretched_u16, {"mode": "asinh", "strength": k}
+
+
+def _restore_starnet_linear_fallback_output(img: np.ndarray, meta: dict) -> np.ndarray:
+    normalized = normalize_to_uint8_bgr(img)
+    if normalized is None:
+        return None
+    if not isinstance(meta, dict) or str(meta.get("mode") or "") != "asinh":
+        return normalized
+    k = max(1e-3, float(meta.get("strength", 12.0) or 12.0))
+    denom = float(np.arcsinh(k))
+    y = np.clip(normalized.astype(np.float32) / 255.0, 0.0, 1.0)
+    x = np.sinh(y * denom) / k
+    restored = np.clip(np.round(x * 255.0), 0, 255).astype(np.uint8)
+    return restored
+
+
+def _build_starnet_command(
+    base_command: list,
+    mode: str,
+    input_path: str,
+    output_path: str,
+    stride: int,
+    prestretch_linear: bool = False,
+    supports_linear_flag: bool = False,
+) -> list:
     stride_value = int(stride)
     stride_value = max(2, min(512, stride_value))
     if stride_value % 2 != 0:
@@ -7236,18 +8118,22 @@ def _build_starnet_command(base_command: list, mode: str, input_path: str, outpu
     if str(mode) == "legacy":
         return list(base_command) + [input_path, output_path, "--stride", str(stride_value)]
 
-    return list(base_command) + ["-i", input_path, "-o", output_path, "-s", str(stride_value), "-u", "-q"]
+    command = list(base_command) + ["-i", input_path, "-o", output_path, "-s", str(stride_value), "-u", "-q"]
+    if bool(prestretch_linear) and bool(supports_linear_flag):
+        command.append("-linear=1")
+    return command
 
 
 class StarNetWorker(QThread):
     progress_signal = pyqtSignal(str, int, int)
     finished_signal = pyqtSignal(object, str)
 
-    def __init__(self, img, starnet_path, stride=16):
+    def __init__(self, img, starnet_path, stride=16, prestretch_linear: bool = False):
         super().__init__()
         self.img = img
         self.starnet_path = starnet_path
         self.stride = int(stride)
+        self.prestretch_linear = bool(prestretch_linear)
 
     @staticmethod
     def _extract_progress_percent(text: str):
@@ -7272,18 +8158,36 @@ class StarNetWorker(QThread):
 
         try:
             self.progress_signal.emit("Preparing StarNet++ input...", 10, 20)
-            if not cv2.imwrite(input_path, self._to_starnet_input(self.img)):
-                self.finished_signal.emit(None, "Could not write temporary StarNet++ input.")
-                return
-
-            self.progress_signal.emit("Running StarNet++...", 35, 40)
             base_command, command_dir, mode = _resolve_starnet_command(self.starnet_path)
             if not base_command:
                 self.finished_signal.emit(None, "StarNet not found. Install starnet2 in PATH or select executable path.")
                 return
+            supports_linear_flag = _starnet_supports_linear_flag(base_command, command_dir)
+            fallback_linear_meta = None
+            input_for_starnet = self._to_starnet_input(self.img)
+            if self.prestretch_linear and not supports_linear_flag:
+                self.progress_signal.emit("Pre-stretching linear image for StarNet++...", 18, 5)
+                prepared_input, fallback_linear_meta = _prepare_starnet_linear_fallback_input(self.img)
+                if prepared_input is None:
+                    self.finished_signal.emit(None, "Could not prepare temporary pre-stretched input for StarNet++.")
+                    return
+                input_for_starnet = prepared_input
+            if not cv2.imwrite(input_path, input_for_starnet):
+                self.finished_signal.emit(None, "Could not write temporary StarNet++ input.")
+                return
+
+            self.progress_signal.emit("Running StarNet++...", 35, 40)
             creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
             start_time = time.time()
-            command = _build_starnet_command(base_command, mode, input_path, output_path, self.stride)
+            command = _build_starnet_command(
+                base_command,
+                mode,
+                input_path,
+                output_path,
+                self.stride,
+                prestretch_linear=self.prestretch_linear,
+                supports_linear_flag=supports_linear_flag,
+            )
             output_chunks = []
             live_percent = -1
 
@@ -7392,6 +8296,14 @@ class StarNetWorker(QThread):
                 self.finished_signal.emit(None, message)
                 return
 
+            if fallback_linear_meta:
+                self.progress_signal.emit("Restoring linear output...", 96, 92)
+                restored = _restore_starnet_linear_fallback_output(result_img, fallback_linear_meta)
+                if restored is None:
+                    self.finished_signal.emit(None, "StarNet++ finished, but restoring linear output failed.")
+                    return
+                result_img = restored
+
             self.progress_signal.emit("StarNet++ complete.", 100, 100)
             self.finished_signal.emit(result_img, "")
 
@@ -7476,7 +8388,12 @@ class DeepSNRWorker(QThread):
             self.finished_signal.emit(-998, "", str(e), self.output_path)
 
 
-def run_starnet_sync_for_image(img: np.ndarray, starnet_path: str = None, stride: int = 16):
+def run_starnet_sync_for_image(
+    img: np.ndarray,
+    starnet_path: str = None,
+    stride: int = 16,
+    prestretch_linear: bool = False,
+):
     temp_dir = tempfile.mkdtemp(prefix="astro_starnet_sync_")
     input_path = os.path.join(temp_dir, "input.tif")
     output_path = os.path.join(temp_dir, "starless.tif")
@@ -7484,16 +8401,31 @@ def run_starnet_sync_for_image(img: np.ndarray, starnet_path: str = None, stride
         data = normalize_to_uint8_bgr(img)
         if data is None:
             return None, "Invalid image for StarNet++."
-        input_16 = data.astype(np.uint16) * 257
-        if not cv2.imwrite(input_path, input_16):
-            return None, "Could not write temporary StarNet++ input."
 
         base_command, command_dir, mode = _resolve_starnet_command(starnet_path)
         if not base_command:
             return None, "StarNet not found. Install starnet2 in PATH or select executable path."
+        supports_linear_flag = _starnet_supports_linear_flag(base_command, command_dir)
+        fallback_linear_meta = None
+        input_16 = data.astype(np.uint16) * 257
+        if bool(prestretch_linear) and not supports_linear_flag:
+            prepared_input, fallback_linear_meta = _prepare_starnet_linear_fallback_input(data)
+            if prepared_input is None:
+                return None, "Could not prepare temporary pre-stretched input for StarNet++."
+            input_16 = prepared_input
+        if not cv2.imwrite(input_path, input_16):
+            return None, "Could not write temporary StarNet++ input."
 
         creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        command = _build_starnet_command(base_command, mode, input_path, output_path, int(stride))
+        command = _build_starnet_command(
+            base_command,
+            mode,
+            input_path,
+            output_path,
+            int(stride),
+            prestretch_linear=bool(prestretch_linear),
+            supports_linear_flag=supports_linear_flag,
+        )
         result = subprocess.run(
             command,
             cwd=command_dir,
@@ -7511,12 +8443,21 @@ def run_starnet_sync_for_image(img: np.ndarray, starnet_path: str = None, stride
                 msg += f" {details}"
             return None, msg
 
-        worker = StarNetWorker(data, starnet_path, stride=int(stride))
+        worker = StarNetWorker(
+            data,
+            starnet_path,
+            stride=int(stride),
+            prestretch_linear=bool(prestretch_linear),
+        )
         output_candidates = worker._find_output_candidates(temp_dir, output_path, time.time(), command_dir)
         for candidate in output_candidates:
             if os.path.exists(candidate):
                 parsed = normalize_to_uint8_bgr(safe_imread(candidate))
                 if parsed is not None:
+                    if fallback_linear_meta:
+                        parsed = _restore_starnet_linear_fallback_output(parsed, fallback_linear_meta)
+                        if parsed is None:
+                            return None, "StarNet++ finished, but restoring linear output failed."
                     return parsed, ""
 
         return None, "StarNet++ completed, but output image was not found."
@@ -7708,12 +8649,20 @@ class Fly3DWorker(QThread):
     progress_signal = pyqtSignal(str, int, int)
     finished_signal = pyqtSignal(str, str)
 
-    def __init__(self, source_img: np.ndarray, payload: dict, starnet_path: str = None, starnet_stride: int = 16):
+    def __init__(
+        self,
+        source_img: np.ndarray,
+        payload: dict,
+        starnet_path: str = None,
+        starnet_stride: int = 16,
+        starnet_prestretch_linear: bool = False,
+    ):
         super().__init__()
         self.source_img = normalize_to_uint8_bgr(source_img)
         self.payload = dict(payload or {})
         self.starnet_path = starnet_path
         self.starnet_stride = int(starnet_stride)
+        self.starnet_prestretch_linear = bool(starnet_prestretch_linear)
 
     def _build_layer_from_cut(self, base: np.ndarray, path: str):
         if not path or not os.path.exists(path):
@@ -7957,7 +8906,12 @@ class Fly3DWorker(QThread):
         use_starless = bool(self.payload.get("starless"))
         if use_starless:
             self.progress_signal.emit("Running StarNet++ for starless frame...", 18, 20)
-            starless, err = run_starnet_sync_for_image(base, self.starnet_path, self.starnet_stride)
+            starless, err = run_starnet_sync_for_image(
+                base,
+                self.starnet_path,
+                self.starnet_stride,
+                prestretch_linear=self.starnet_prestretch_linear,
+            )
             if err:
                 self.finished_signal.emit("", err)
                 return
@@ -8348,6 +9302,7 @@ class NewWorkspaceDialog(QDialog):
         ("console", "Console"),
         ("histogram", "Histogram"),
         ("menu", "Menu"),
+        ("star_correction", "Star Correction"),
         ("color_calibration", "Color Calibration"),
     ]
 
@@ -8605,18 +9560,30 @@ class PreferencesDialog(QDialog):
         self.combo_theme.setCurrentText(str(getattr(self.app, "theme_name", "Fusion Dark")))
         appearance_layout.addWidget(self.combo_theme, 0, 1)
 
-        appearance_layout.addWidget(QLabel("JÄ™zyk:"), 1, 0)
+        appearance_layout.addWidget(QLabel("Kolor wiodÄ…cy:"), 1, 0)
+        self.combo_accent = QComboBox()
+        self.combo_accent.addItems(list(ACCENT_PRESETS.keys()))
+        self.combo_accent.setCurrentText(normalize_accent_name(getattr(self.app, "accent_name", "Ultra Blue")))
+        appearance_layout.addWidget(self.combo_accent, 1, 1)
+        self.lbl_accent_preview = QLabel("")
+        self.lbl_accent_preview.setFixedSize(30, 18)
+        self.lbl_accent_preview.setToolTip("Podglad koloru wiodacego")
+        appearance_layout.addWidget(self.lbl_accent_preview, 1, 2)
+        self.combo_accent.currentTextChanged.connect(self._update_accent_preview)
+        self._update_accent_preview()
+
+        appearance_layout.addWidget(QLabel("JÄ™zyk:"), 2, 0)
         self.combo_language = QComboBox()
         self.combo_language.addItems(["pl", "en"])
         self.combo_language.setCurrentText(str(getattr(self.app, "language", "pl")))
-        appearance_layout.addWidget(self.combo_language, 1, 1)
+        appearance_layout.addWidget(self.combo_language, 2, 1)
 
-        appearance_layout.addWidget(QLabel("PodglÄ…d:"), 2, 0)
+        appearance_layout.addWidget(QLabel("PodglÄ…d:"), 3, 0)
         self.appearance_info = QLabel(
             "Styl zastÄ™puje prosty przeĹ‚Ä…cznik dark mode i jest zapamiÄ™tywany miÄ™dzy uruchomieniami."
         )
         self.appearance_info.setWordWrap(True)
-        appearance_layout.addWidget(self.appearance_info, 2, 1)
+        appearance_layout.addWidget(self.appearance_info, 3, 1)
         tabs.addTab(appearance_tab, "WyglÄ…d")
 
 
@@ -8733,6 +9700,16 @@ class PreferencesDialog(QDialog):
         self.app.select_deepsnr_path()
         self.refresh_select_paths()
 
+    def _update_accent_preview(self):
+        if not hasattr(self, "combo_accent") or not hasattr(self, "lbl_accent_preview"):
+            return
+        accent_name = normalize_accent_name(self.combo_accent.currentText())
+        accent = get_accent_colors(accent_name)
+        self.lbl_accent_preview.setStyleSheet(
+            f"background-color: {accent['base']}; border: 1px solid {accent['border']}; border-radius: 4px;"
+        )
+        self.lbl_accent_preview.setToolTip(f"{accent_name}: {accent['base']}")
+
     def refresh_joystick_controls(self):
         if getattr(self.app, "arduino_joystick_worker", None) is None:
             self.btn_arduino_joystick_pref.setText(self.app.tr("connect_joystick", "Connect Joystick"))
@@ -8742,6 +9719,7 @@ class PreferencesDialog(QDialog):
 
     def apply_changes(self):
         theme_name = self.combo_theme.currentText().strip() or "Fusion Dark"
+        accent_name = normalize_accent_name(self.combo_accent.currentText()) if hasattr(self, "combo_accent") else "Ultra Blue"
         language = self.combo_language.currentText().strip() or "pl"
         provider = self.combo_onnx_provider.currentText().strip() or "Auto"
         cpu_cores = int(self.spin_cpu_cores.value())
@@ -8754,6 +9732,7 @@ class PreferencesDialog(QDialog):
 
         self.app.apply_preferences(
             theme_name=theme_name,
+            accent_name=accent_name,
             language=language,
             processor_cores=cpu_cores,
             onnx_provider=provider,
@@ -8770,6 +9749,7 @@ class MagicProgressDialog(QDialog):
         self.setWindowTitle("Magic Filter Progress")
         self.setModal(True)
         self.setMinimumWidth(400)
+        self._close_locked = False
 
         layout = QVBoxLayout(self)
         apply_standard_layout_margins(layout)
@@ -8792,7 +9772,9 @@ class MagicProgressDialog(QDialog):
 
     def _set_scene_from_stage(self, stage_name: str):
         text = str(stage_name or "").strip().lower()
-        if "stack finished" in text or "done" in text:
+        if "starnet" in text or "starless" in text:
+            scene = "starnet"
+        elif "stack finished" in text or "done" in text:
             scene = "finished"
         elif "stacking" in text:
             scene = "stacking"
@@ -8828,9 +9810,29 @@ class MagicProgressDialog(QDialog):
         self.progress_current.setValue(max(0, min(100, current_value)))
         QApplication.processEvents()
 
+    def set_close_locked(self, locked: bool):
+        self._close_locked = bool(locked)
+
+    def force_close(self):
+        self._close_locked = False
+        self.close()
+
+    def closeEvent(self, event):
+        if self._close_locked:
+            event.ignore()
+            return
+        super().closeEvent(event)
+
+    def reject(self):
+        if self._close_locked:
+            return
+        super().reject()
+
 
 FITS_EXTENSIONS = (".fits", ".fit", ".fts")
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tif", ".tiff") + FITS_EXTENSIONS
+VIDEO_EXTENSIONS = (".avi",)
+SER_EXTENSIONS = (".ser",)
 BAYER_PATTERN_TO_OPENCV = {
     "BGGR": cv2.COLOR_BayerBG2BGR,
     "RGGB": cv2.COLOR_BayerRG2BGR,
@@ -8845,6 +9847,118 @@ def _is_fits_path(path: str) -> bool:
 
 def _is_supported_image_path(path: str) -> bool:
     return os.path.isfile(path) and os.path.splitext(path)[1].lower() in IMAGE_EXTENSIONS
+
+
+def _is_video_path(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in VIDEO_EXTENSIONS
+
+
+def _is_ser_path(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in SER_EXTENSIONS
+
+
+def _ser_color_id_to_bayer_pattern(color_id: int) -> str:
+    return {
+        8: "RGGB",
+        9: "GRBG",
+        10: "GBRG",
+        11: "BGGR",
+    }.get(int(color_id), "")
+
+
+def read_frames_from_avi(path: str) -> list[np.ndarray]:
+    capture = cv2.VideoCapture(path)
+    if not capture.isOpened():
+        raise RuntimeError("cannot open AVI file")
+
+    frames: list[np.ndarray] = []
+    try:
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            if frame is None or getattr(frame, "size", 0) == 0:
+                continue
+            frames.append(frame)
+    finally:
+        capture.release()
+
+    if not frames:
+        raise RuntimeError("video contains no decodable frames")
+    return frames
+
+
+def read_frames_from_ser(path: str) -> tuple[list[np.ndarray], str]:
+    with open(path, "rb") as handle:
+        header = handle.read(178)
+        if len(header) < 178:
+            raise RuntimeError("SER header is incomplete")
+
+        try:
+            parsed = struct.unpack("<14s7I40s40s40sQQ", header)
+        except struct.error as exc:
+            raise RuntimeError("SER header decode failed") from exc
+
+        _file_id = parsed[0]
+        _lu_id = int(parsed[1])
+        color_id = int(parsed[2])
+        little_endian = int(parsed[3])
+        width = int(parsed[4])
+        height = int(parsed[5])
+        pixel_depth_per_plane = int(parsed[6])
+        frame_count = int(parsed[7])
+
+        if width <= 0 or height <= 0:
+            raise RuntimeError("SER has invalid image dimensions")
+        if pixel_depth_per_plane <= 0:
+            raise RuntimeError("SER has invalid pixel depth")
+
+        bayer_pattern = _ser_color_id_to_bayer_pattern(color_id)
+        if color_id in (16, 17):
+            channels = 3
+        else:
+            channels = 1
+
+        bytes_per_sample = 1 if pixel_depth_per_plane <= 8 else 2
+        frame_bytes = width * height * channels * bytes_per_sample
+        if frame_bytes <= 0:
+            raise RuntimeError("SER frame size is invalid")
+
+        if frame_count <= 0:
+            file_size = os.path.getsize(path)
+            payload_size = max(0, file_size - 178)
+            frame_count = payload_size // frame_bytes
+
+        if frame_count <= 0:
+            raise RuntimeError("SER contains no frames")
+
+        if bytes_per_sample == 1:
+            dtype = np.uint8
+        else:
+            if little_endian == 0:
+                dtype = np.dtype(">u2")
+            else:
+                dtype = np.dtype("<u2")
+
+        frames: list[np.ndarray] = []
+        for _ in range(frame_count):
+            raw_frame = handle.read(frame_bytes)
+            if len(raw_frame) < frame_bytes:
+                break
+
+            frame = np.frombuffer(raw_frame, dtype=dtype)
+            if channels == 1:
+                frame = frame.reshape((height, width))
+            else:
+                frame = frame.reshape((height, width, 3))
+                if color_id == 17:
+                    frame = frame[..., ::-1]
+            frames.append(np.array(frame, copy=True))
+
+    if not frames:
+        raise RuntimeError("SER contains no readable frames")
+
+    return frames, bayer_pattern
 
 
 def normalize_bayer_pattern(pattern: str) -> str:
@@ -9181,14 +10295,96 @@ def process_image_with_tiles(
     return np.clip(result, 0, 255).astype(np.uint8)
 
 
+def _estimate_luma_noise(gray_01: np.ndarray) -> float:
+    gray = np.clip(gray_01.astype(np.float32), 0.0, 1.0)
+    lap = cv2.Laplacian(gray, cv2.CV_32F, ksize=3)
+    median = float(np.median(lap))
+    mad = float(np.median(np.abs(lap - median)))
+    sigma = mad / 0.6745 if mad > 1e-8 else 0.0
+    return float(np.clip(sigma, 0.0, 0.25))
+
+
+def _smart_denoise_bgr(img_u8: np.ndarray) -> tuple[np.ndarray, float]:
+    if img_u8 is None or img_u8.ndim != 3 or img_u8.shape[2] != 3:
+        return img_u8, 0.0
+
+    lab = cv2.cvtColor(img_u8, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+
+    l_norm = l.astype(np.float32) / 255.0
+    noise_level = _estimate_luma_noise(l_norm)
+
+    h = float(np.clip(3.5 + noise_level * 70.0, 3.0, 12.0))
+    l_nlm = cv2.fastNlMeansDenoising(l, None, h, 7, 21)
+
+    grad_x = cv2.Sobel(l_norm, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(l_norm, cv2.CV_32F, 0, 1, ksize=3)
+    grad = np.sqrt(grad_x * grad_x + grad_y * grad_y)
+    grad /= float(np.max(grad) + 1e-6)
+
+    smooth_mask = 1.0 - cv2.GaussianBlur(np.clip(grad, 0.0, 1.0), (0, 0), 1.1)
+    denoise_strength = float(np.clip(0.25 + noise_level * 5.0, 0.25, 0.9))
+    alpha_l = np.clip(smooth_mask * denoise_strength, 0.0, 1.0)
+
+    l_out = l.astype(np.float32) * (1.0 - alpha_l) + l_nlm.astype(np.float32) * alpha_l
+
+    chroma_sigma = float(np.clip(0.5 + noise_level * 7.0, 0.5, 2.2))
+    a_blur = cv2.GaussianBlur(a, (0, 0), chroma_sigma)
+    b_blur = cv2.GaussianBlur(b, (0, 0), chroma_sigma)
+    alpha_c = np.clip(alpha_l * 0.6, 0.0, 0.75)
+    a_out = a.astype(np.float32) * (1.0 - alpha_c) + a_blur.astype(np.float32) * alpha_c
+    b_out = b.astype(np.float32) * (1.0 - alpha_c) + b_blur.astype(np.float32) * alpha_c
+
+    denoised_lab = cv2.merge([
+        np.clip(l_out, 0, 255).astype(np.uint8),
+        np.clip(a_out, 0, 255).astype(np.uint8),
+        np.clip(b_out, 0, 255).astype(np.uint8),
+    ])
+    return cv2.cvtColor(denoised_lab, cv2.COLOR_LAB2BGR), noise_level
+
+
+def _smart_sharpen_bgr(img_u8: np.ndarray, noise_level: float) -> np.ndarray:
+    if img_u8 is None or img_u8.ndim != 3 or img_u8.shape[2] != 3:
+        return img_u8
+
+    lab = cv2.cvtColor(img_u8, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+
+    l_f = l.astype(np.float32) / 255.0
+    base = cv2.GaussianBlur(l_f, (0, 0), 1.0)
+    detail = l_f - base
+
+    grad_x = cv2.Sobel(l_f, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(l_f, cv2.CV_32F, 0, 1, ksize=3)
+    edge = np.sqrt(grad_x * grad_x + grad_y * grad_y)
+    edge /= float(np.max(edge) + 1e-6)
+
+    detail_abs = np.abs(detail)
+    noise_floor = float(np.percentile(detail_abs, 65.0))
+    detail_gate = np.clip((detail_abs - noise_floor) / (noise_floor + 1e-6), 0.0, 1.0)
+
+    bright_mask = np.clip((l_f - 0.82) / 0.18, 0.0, 1.0)
+    edge_weight = cv2.GaussianBlur(np.clip(edge, 0.0, 1.0), (0, 0), 0.8)
+    gain = np.clip(edge_weight * detail_gate * (1.0 - 0.55 * bright_mask), 0.0, 1.0)
+
+    amount = float(np.clip(1.0 - noise_level * 2.6, 0.4, 1.0))
+    l_sharp = np.clip(l_f + detail * amount * gain, 0.0, 1.0)
+
+    out_lab = cv2.merge([
+        np.clip(l_sharp * 255.0, 0, 255).astype(np.uint8),
+        a,
+        b,
+    ])
+    return cv2.cvtColor(out_lab, cv2.COLOR_LAB2BGR)
+
+
 def magic_pipeline(img: np.ndarray, denoise_model_path: str = None, bg_removal_model_path: str = None, progress_callback=None) -> np.ndarray:
     """
-    Pipeline with ONNX-based denoising and background extraction using tiling:
-    - Optional ONNX denoising
-    - Optional ONNX background extraction
-    - normalizacja
-    - asinh stretch
-    - unsharp mask
+    Pipeline for intelligent denoise and sharpen:
+    - optional ONNX denoise
+    - optional ONNX background extraction
+    - adaptive edge-aware denoise
+    - adaptive edge-aware sharpen
     """
     if img is None:
         return None
@@ -9240,23 +10436,21 @@ def magic_pipeline(img: np.ndarray, denoise_model_path: str = None, bg_removal_m
         mask = mask.astype(np.float32) / 255.0
         result = result * mask
 
+    result_u8 = np.clip(result, 0, 255).astype(np.uint8)
+
+    if progress_callback is not None:
+        progress_callback("Smart denoise", 80, 0)
+    result_u8, noise_level = _smart_denoise_bgr(result_u8)
+    if progress_callback is not None:
+        progress_callback("Smart denoise", 90, 100)
+
+    if progress_callback is not None:
+        progress_callback("Smart sharpen", 95, 0)
+    result_u8 = _smart_sharpen_bgr(result_u8, noise_level)
+
     if progress_callback is not None:
         progress_callback("Finished", 100, 100)
-    result = np.clip(result, 0, 255).astype(np.float32)
-
-    img_f = result
-    img_norm = img_f - img_f.min()
-    if img_norm.max() > 0:
-        img_norm /= img_norm.max()
-
-    stretch_k = 5.0
-    stretch = np.arcsinh(stretch_k * img_norm) / np.arcsinh(stretch_k)
-
-    blur = cv2.GaussianBlur(stretch, (0, 0), 1.0)
-    sharp = cv2.addWeighted(stretch, 1.5, blur, -0.5, 0)
-
-    sharp = np.clip(sharp * 255, 0, 255).astype(np.uint8)
-    return sharp
+    return np.clip(result_u8, 0, 255).astype(np.uint8)
 
 
 # ---------- Config Management ----------
@@ -9283,6 +10477,7 @@ def load_config() -> dict:
         "starnet_stride": 16,
         "dark_mode": True,
         "theme_name": "Fusion Dark",
+        "accent_name": "Ultra Blue",
         "api_key": "",
         "pixel_size_um": 5.4,
         "focal_length_mm": 800.0,
@@ -9362,7 +10557,8 @@ def save_config(denoise_path: str = None, bg_removal_path: str = None,
                 home_folder: str = None,
                 topbar_button_order: list = None,
                 deepsnr_path: str = None,
-                deepsnr_args: str = None):
+                deepsnr_args: str = None,
+                accent_name: str = None):
     if theme_name is None:
         theme_name = APP_PREFERENCES.get("theme_name", "Fusion Dark" if dark_mode else "Light")
     if language is None:
@@ -9381,6 +10577,8 @@ def save_config(denoise_path: str = None, bg_removal_path: str = None,
         deepsnr_path = APP_PREFERENCES.get("deepsnr_path")
     if deepsnr_args is None:
         deepsnr_args = APP_PREFERENCES.get("deepsnr_args", DEFAULT_DEEPSNR_ARGS)
+    if accent_name is None:
+        accent_name = APP_PREFERENCES.get("accent_name", "Ultra Blue")
 
     config = {
         "denoise_model_path": denoise_path,
@@ -9391,6 +10589,7 @@ def save_config(denoise_path: str = None, bg_removal_path: str = None,
         "starnet_stride": starnet_stride,
         "dark_mode": dark_mode,
         "theme_name": theme_name,
+        "accent_name": normalize_accent_name(accent_name),
         "api_key": api_key,
         "pixel_size_um": pixel_size_um,
         "focal_length_mm": focal_length_mm,
@@ -9418,6 +10617,7 @@ def save_config(denoise_path: str = None, bg_removal_path: str = None,
 
 APP_PREFERENCES = {
     "theme_name": "Fusion Dark",
+    "accent_name": "Ultra Blue",
     "language": "pl",
     "processor_cores": max(1, (os.cpu_count() or 4) // 2),
     "onnx_provider": "Auto",
@@ -9470,21 +10670,23 @@ def get_midnight_stylesheet() -> str:
     )
 
 
-def get_theme_stylesheet(theme_name: str) -> str:
+def get_theme_stylesheet(theme_name: str, accent_name: str = "Ultra Blue") -> str:
     normalized = (theme_name or "").strip().lower()
     if normalized in ("light", "jasny"):
-        return get_light_stylesheet()
-    if normalized in ("graphite", "graphite dark"):
-        return get_graphite_stylesheet()
-    if normalized in ("midnight", "midnight blue"):
-        return get_midnight_stylesheet()
-    return get_dark_stylesheet()
+        base = get_light_stylesheet()
+    elif normalized in ("graphite", "graphite dark"):
+        base = get_graphite_stylesheet()
+    elif normalized in ("midnight", "midnight blue"):
+        base = get_midnight_stylesheet()
+    else:
+        base = get_dark_stylesheet()
+    return _apply_accent_to_stylesheet(base, accent_name)
 
 
-def get_theme_palette(theme_name: str) -> QPalette:
+def get_theme_palette(theme_name: str, accent_name: str = "Ultra Blue") -> QPalette:
     if (theme_name or "").strip().lower() in ("light", "jasny"):
         return QPalette()
-    return get_dark_palette()
+    return get_dark_palette(accent_name)
 
 def apply_levels(img: np.ndarray, black: int, gamma: float, white: int, channels=None) -> np.ndarray:
     if img is None:
@@ -11851,10 +13053,14 @@ class ConsoleCommandInput(QLineEdit):
         "open",
         "mosaic",
         "stack",
+        "solar stack",
+        "run.solarstack",
         "curves",
         "levels",
         "histogram",
         "correction",
+        "star correction",
+        "open.starcorrection",
         "ghs",
         "menu",
         "console",
@@ -12023,6 +13229,7 @@ class ConsoleWindow(QDialog):
             "open.levels": "levels",
             "open.histogram": "histogram",
             "open.correction": "correction",
+            "open.starcorrection": "star correction",
             "open.ghs": "ghs",
             "open.calibration": "calibration",
             "open.console": "console",
@@ -12030,10 +13237,12 @@ class ConsoleWindow(QDialog):
             "run.magic": "magic",
             "run.mosaic": "mosaic",
             "run.stack": "stack",
+            "run.solarstack": "solar stack",
             "run.starnet": "starnet++",
             "run.starnet++": "starnet++",
             "run.deepsnr": "deepsnr",
             "open.blur": "blur",
+            "open.lce": "local contrast",
             "save": "save",
         }
         command = script_map.get(lower, line)
@@ -12046,6 +13255,7 @@ class PhotoshopMenuPanel(QFrame):
         ("curves", "Curves"),
         ("stars", "Stars"),
         ("blur", "Gaussian Blur"),
+        ("local_contrast", "Local Contrast Enhancement"),
         ("background", "Background"),
         ("plate_solve_overlay", "Plate Solve Overlay"),
         ("grid_overlay", "Grid Overlay"),
@@ -12715,304 +13925,6 @@ class PhotoshopMenuDialog(QDialog):
 
 
 # ---------- Color Processor (Camera RAW + HSL) ----------
-
-class ColorProcessor:
-    COLOR_RANGES = {
-        "Reds":      [(0, 10), (170, 179)],
-        "Oranges":   [(11, 25)],
-        "Yellows":   [(26, 35)],
-        "Greens":    [(36, 85)],
-        "Aquas":     [(86, 100)],
-        "Blues":     [(101, 130)],
-        "Purples":   [(131, 150)],
-        "Magentas":  [(151, 169)],
-    }
-
-    @staticmethod
-    def _fast_noise_reduction(img: np.ndarray, amount: float) -> np.ndarray:
-        if amount <= 0.0:
-            return img
-
-        # Keep denoising interactive by filtering only the luma channel and
-        # optionally working on a smaller intermediate when the source is large.
-        img_u8 = np.clip(img * 255.0, 0, 255).astype(np.uint8)
-        lab = cv2.cvtColor(img_u8, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-
-        max_dim = max(img_u8.shape[:2])
-        scale = 1.0
-        if max_dim >= 2600:
-            scale = 0.5
-        elif max_dim >= 1600:
-            scale = 0.75
-
-        diameter = 5 if amount < 0.5 else 7
-        sigma = 10.0 + amount * 35.0
-
-        if scale < 1.0:
-            small_l = cv2.resize(l, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-            filtered_small = cv2.bilateralFilter(small_l, diameter, sigma, sigma)
-            l_filtered = cv2.resize(filtered_small, (l.shape[1], l.shape[0]), interpolation=cv2.INTER_LINEAR)
-        else:
-            l_filtered = cv2.bilateralFilter(l, diameter, sigma, sigma)
-
-        if amount > 0.6:
-            chroma_sigma = 0.5 + amount * 0.8
-            a = cv2.GaussianBlur(a, (0, 0), chroma_sigma)
-            b = cv2.GaussianBlur(b, (0, 0), chroma_sigma)
-
-        denoised = cv2.cvtColor(cv2.merge([l_filtered, a, b]), cv2.COLOR_LAB2BGR).astype(np.float32) / 255.0
-        blend = 0.35 + amount * 0.65
-        return np.clip(img * (1.0 - blend) + denoised * blend, 0, 1)
-
-    @staticmethod
-    def _ghs_curve_values(
-        values: np.ndarray,
-        stretch_factor: float,
-        symmetry_point: float,
-        highlight_protection_point: float,
-        shadow_protection_point: float,
-    ) -> np.ndarray:
-        values = np.clip(values.astype(np.float32), 0.0, 1.0)
-        stretch_factor = float(max(0.0, stretch_factor))
-        if stretch_factor <= 1e-6:
-            return values
-
-        shadow_point = float(np.clip(shadow_protection_point, 0.0, 0.95))
-        highlight_point = float(np.clip(highlight_protection_point, 0.05, 1.0))
-        if highlight_point <= shadow_point + 0.02:
-            highlight_point = min(1.0, shadow_point + 0.02)
-        symmetry_point = float(np.clip(symmetry_point, shadow_point + 0.01, highlight_point - 0.01))
-
-        denom = max(1e-6, highlight_point - shadow_point)
-        normalized = np.clip((values - shadow_point) / denom, 0.0, 1.0)
-        symmetry_norm = float(np.clip((symmetry_point - shadow_point) / denom, 0.01, 0.99))
-        k = max(1e-6, stretch_factor)
-        norm_denom = np.arcsinh(k)
-
-        left_mask = normalized <= symmetry_norm
-        right_mask = ~left_mask
-        out_norm = np.empty_like(normalized, dtype=np.float32)
-
-        left_scale = max(1e-6, symmetry_norm)
-        left_x = np.clip(normalized[left_mask] / left_scale, 0.0, 1.0)
-        out_norm[left_mask] = left_scale * (np.arcsinh(k * left_x) / norm_denom)
-
-        right_scale = max(1e-6, 1.0 - symmetry_norm)
-        right_x = np.clip((1.0 - normalized[right_mask]) / right_scale, 0.0, 1.0)
-        out_norm[right_mask] = 1.0 - right_scale * (np.arcsinh(k * right_x) / norm_denom)
-
-        stretched = np.clip(shadow_point + out_norm * denom, 0.0, 1.0)
-
-        transition = 0.03
-
-        def _smoothstep(edge0, edge1, x):
-            t = np.clip((x - edge0) / max(1e-6, edge1 - edge0), 0.0, 1.0)
-            return t * t * (3.0 - 2.0 * t)
-
-        shadow_weight = _smoothstep(shadow_point, shadow_point + transition, values)
-        highlight_weight = 1.0 - _smoothstep(highlight_point - transition, highlight_point, values)
-        protect_weight = shadow_weight * highlight_weight
-        return np.clip(values + (stretched - values) * protect_weight, 0.0, 1.0)
-
-    @staticmethod
-    def _apply_ghs_stretch(
-        img: np.ndarray,
-        stretch_factor: float,
-        local_intensity: float,
-        symmetry_point: float,
-        highlight_protection_point: float,
-        shadow_protection_point: float,
-        colour_stretch_model: str = "independent_channel_values",
-    ) -> np.ndarray:
-        stretch_factor = float(max(0.0, stretch_factor))
-        if stretch_factor <= 1e-6:
-            return np.clip(img, 0, 1)
-
-        local_intensity = float(np.clip(local_intensity, 0.0, 1.0))
-        color_model = str(colour_stretch_model or "independent_channel_values").strip().lower()
-
-        img = np.clip(img.astype(np.float32), 0, 1)
-        if color_model == "luminance_only":
-            img_u8 = np.clip(img * 255.0, 0, 255).astype(np.uint8)
-            hsv = cv2.cvtColor(img_u8, cv2.COLOR_BGR2HSV)
-            h, s, v = cv2.split(hsv)
-            v_f = v.astype(np.float32) / 255.0
-
-            if local_intensity > 1e-6:
-                local_base = cv2.GaussianBlur(v_f, (0, 0), 6.0)
-                local_detail = v_f - local_base
-                v_work = np.clip(v_f + local_detail * (0.6 * local_intensity), 0.0, 1.0)
-            else:
-                v_work = v_f
-
-            v_out = ColorProcessor._ghs_curve_values(
-                v_work,
-                stretch_factor,
-                symmetry_point,
-                highlight_protection_point,
-                shadow_protection_point,
-            )
-
-            hsv_out = cv2.merge([h, s, np.clip(v_out * 255.0, 0, 255).astype(np.uint8)])
-            out = cv2.cvtColor(hsv_out, cv2.COLOR_HSV2BGR).astype(np.float32) / 255.0
-            return np.clip(out, 0, 1)
-
-        out = img.copy()
-        if out.ndim == 2:
-            out = cv2.cvtColor(np.clip(out * 255.0, 0, 255).astype(np.uint8), cv2.COLOR_GRAY2BGR).astype(np.float32) / 255.0
-        for c in range(min(3, out.shape[2])):
-            channel = out[:, :, c]
-            if local_intensity > 1e-6:
-                local_base = cv2.GaussianBlur(channel, (0, 0), 6.0)
-                local_detail = channel - local_base
-                channel_work = np.clip(channel + local_detail * (0.6 * local_intensity), 0.0, 1.0)
-            else:
-                channel_work = channel
-            out[:, :, c] = ColorProcessor._ghs_curve_values(
-                channel_work,
-                stretch_factor,
-                symmetry_point,
-                highlight_protection_point,
-                shadow_protection_point,
-            )
-
-        return np.clip(out, 0, 1)
-
-    @staticmethod
-    def apply_camera_raw_and_hsl(
-        base_img: np.ndarray,
-        basic_params: dict,
-        hsl_params: dict,
-        ghs_params: dict | None = None,
-    ) -> np.ndarray:
-        if base_img is None:
-            return None
-
-        img = base_img.astype(np.float32) / 255.0
-
-        temp = basic_params.get("temperature", 0.0)
-        tint = basic_params.get("tint", 0.0)
-        calibration_red = basic_params.get("calibration_red", 0.0)
-        calibration_green = basic_params.get("calibration_green", 0.0)
-        calibration_blue = basic_params.get("calibration_blue", 0.0)
-        exposure = basic_params.get("exposure", 0.0)
-        contrast = basic_params.get("contrast", 0.0)
-        saturation = basic_params.get("saturation", 0.0)
-        vibrance = basic_params.get("vibrance", 0.0)
-        texture = basic_params.get("texture", 0.0)
-        dehaze = basic_params.get("dehaze", 0.0)
-        clarity = basic_params.get("clarity", 0.0)
-        noise_reduction = basic_params.get("noise_reduction", 0.0)
-
-        ghs_params = ghs_params if isinstance(ghs_params, dict) else {}
-        ghs_stretch_factor = float(max(0.0, ghs_params.get("stretch_factor", 0.0)))
-        ghs_local_intensity = float(np.clip(ghs_params.get("local_intensity", 0.0), 0.0, 1.0))
-        ghs_symmetry_point = float(np.clip(ghs_params.get("symmetry_point", 0.5), 0.0, 1.0))
-        ghs_highlight_point = float(np.clip(ghs_params.get("highlight_protection_point", 0.95), 0.0, 1.0))
-        ghs_shadow_point = float(np.clip(ghs_params.get("shadow_protection_point", 0.05), 0.0, 1.0))
-        ghs_colour_model = str(ghs_params.get("colour_stretch_model", "independent_channel_values") or "independent_channel_values")
-
-        b, g, r = cv2.split(img)
-
-        t_scale = temp / 100.0
-        r *= (1.0 + 0.5 * t_scale)
-        b *= (1.0 - 0.5 * t_scale)
-
-        ti_scale = tint / 100.0
-        g *= (1.0 + 0.5 * ti_scale)
-        r *= (1.0 - 0.25 * ti_scale)
-        b *= (1.0 - 0.25 * ti_scale)
-
-        r *= (1.0 + calibration_red / 200.0)
-        g *= (1.0 + calibration_green / 200.0)
-        b *= (1.0 + calibration_blue / 200.0)
-
-        img = cv2.merge([b, g, r])
-        img = np.clip(img, 0, 1)
-
-        if noise_reduction > 0.0:
-            img = ColorProcessor._fast_noise_reduction(img, noise_reduction)
-
-        if dehaze != 0.0:
-            haze_gain = 1.0 + dehaze * 0.45
-            img = np.clip((img - 0.5) * haze_gain + 0.5, 0, 1)
-
-        img *= 2.0 ** exposure
-        img = (img - 0.5) * (1.0 + contrast) + 0.5
-        img = np.clip(img, 0, 1)
-
-        if ghs_stretch_factor > 0.0:
-            img = ColorProcessor._apply_ghs_stretch(
-                img,
-                ghs_stretch_factor,
-                ghs_local_intensity,
-                ghs_symmetry_point,
-                ghs_highlight_point,
-                ghs_shadow_point,
-                ghs_colour_model,
-            )
-
-        if texture != 0.0 or clarity != 0.0:
-            local_blur = cv2.GaussianBlur(img, (0, 0), 3.0)
-            detail = img - local_blur
-            img = img + detail * texture
-            img = img + detail * clarity * 0.5
-            img = np.clip(img, 0, 1)
-
-        img_u8 = np.clip(img * 255.0, 0, 255).astype(np.uint8)
-        hsv = cv2.cvtColor(img_u8, cv2.COLOR_BGR2HSV)
-        h, s, v = cv2.split(hsv)
-
-        s = s.astype(np.float32)
-        s *= (1.0 + saturation)
-        s = np.clip(s, 0, 255)
-
-        vibr_factor = 1.0 + vibrance
-        s = s + (255.0 - s) * (vibr_factor - 1.0)
-        s = np.clip(s, 0, 255)
-
-        hue_dict = hsl_params.get("Hue", {})
-        sat_dict = hsl_params.get("Saturation", {})
-        lum_dict = hsl_params.get("Luminance", {})
-
-        h = h.astype(np.int16)
-        v = v.astype(np.int16)
-
-        for color_name, ranges in ColorProcessor.COLOR_RANGES.items():
-            hue_shift_val = hue_dict.get(color_name, 0)
-            sat_shift_val = sat_dict.get(color_name, 0)
-            lum_shift_val = lum_dict.get(color_name, 0)
-
-            if hue_shift_val == 0 and sat_shift_val == 0 and lum_shift_val == 0:
-                continue
-
-            mask = np.zeros_like(h, dtype=bool)
-            for (hmin, hmax) in ranges:
-                if hmin <= hmax:
-                    mask |= (h >= hmin) & (h <= hmax)
-                else:
-                    mask |= (h >= hmin) | (h <= hmax)
-
-            if not np.any(mask):
-                continue
-
-            hue_shift = int(hue_shift_val / 3)
-            h[mask] = (h[mask] + hue_shift) % 180
-
-            sat_scale = 1.0 + (sat_shift_val / 100.0)
-            s[mask] = np.clip(s[mask] * sat_scale, 0, 255)
-
-            lum_shift = int(lum_shift_val * 0.8)
-            v[mask] = np.clip(v[mask] + lum_shift, 0, 255)
-
-        h = np.clip(h, 0, 179).astype(np.uint8)
-        s = np.clip(s, 0, 255).astype(np.uint8)
-        v = np.clip(v, 0, 255).astype(np.uint8)
-
-        hsv = cv2.merge([h, s, v])
-        out_bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
-        return out_bgr
 
 
 # ---------- Viewer ----------
@@ -14139,6 +15051,113 @@ class CorrectionDialog(QDialog):
             parent.apply_full_processing()
         super().closeEvent(event)
 
+
+class StarCorrectionDialog(QDialog):
+    def __init__(self, on_change_callback, on_apply_callback, on_reset_callback, parent=None):
+        super().__init__(parent)
+        apply_dialog_window_flags(self)
+        self.setWindowTitle("Star Correction")
+        self.setMinimumWidth(460)
+        self._on_change_callback = on_change_callback
+        self._on_apply_callback = on_apply_callback
+        self._on_reset_callback = on_reset_callback
+
+        layout = QVBoxLayout(self)
+        apply_standard_layout_margins(layout)
+
+        info = QLabel("Adjust star aberration and star shape correction.")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        grid = QGridLayout()
+
+        self.lbl_aberration = QLabel("Star aberration fix: 0")
+        self.sld_aberration = QSlider(Qt.Horizontal)
+        self.sld_aberration.setRange(0, 100)
+        self.sld_aberration.setValue(0)
+        self.spin_aberration = QSpinBox()
+        self.spin_aberration.setRange(0, 100)
+        self.spin_aberration.setValue(0)
+        self.sld_aberration.valueChanged.connect(self.spin_aberration.setValue)
+        self.spin_aberration.valueChanged.connect(self.sld_aberration.setValue)
+        self.sld_aberration.valueChanged.connect(self._on_aberration_changed)
+
+        self.lbl_shape = QLabel("Star shape fix: 0")
+        self.sld_shape = QSlider(Qt.Horizontal)
+        self.sld_shape.setRange(0, 100)
+        self.sld_shape.setValue(0)
+        self.spin_shape = QSpinBox()
+        self.spin_shape.setRange(0, 100)
+        self.spin_shape.setValue(0)
+        self.sld_shape.valueChanged.connect(self.spin_shape.setValue)
+        self.spin_shape.valueChanged.connect(self.sld_shape.setValue)
+        self.sld_shape.valueChanged.connect(self._on_shape_changed)
+
+        grid.addWidget(self.lbl_aberration, 0, 0)
+        grid.addWidget(self.sld_aberration, 0, 1)
+        grid.addWidget(self.spin_aberration, 0, 2)
+        grid.addWidget(self.lbl_shape, 1, 0)
+        grid.addWidget(self.sld_shape, 1, 1)
+        grid.addWidget(self.spin_shape, 1, 2)
+        layout.addLayout(grid)
+
+        buttons = QHBoxLayout()
+        self.btn_apply = QPushButton("Apply")
+        self.btn_reset = QPushButton("Reset")
+        self.btn_close = QPushButton("Close")
+        self.btn_apply.clicked.connect(self._apply)
+        self.btn_reset.clicked.connect(self._reset)
+        self.btn_close.clicked.connect(self.close)
+        buttons.addWidget(self.btn_apply)
+        buttons.addWidget(self.btn_reset)
+        buttons.addStretch(1)
+        buttons.addWidget(self.btn_close)
+        layout.addLayout(buttons)
+
+    def set_values(self, aberration: float, shape: float, notify: bool = False):
+        a = int(round(float(np.clip(aberration, 0.0, 1.0)) * 100.0))
+        s = int(round(float(np.clip(shape, 0.0, 1.0)) * 100.0))
+        for widget, value in (
+            (self.sld_aberration, a),
+            (self.sld_shape, s),
+            (self.spin_aberration, a),
+            (self.spin_shape, s),
+        ):
+            widget.blockSignals(True)
+            widget.setValue(value)
+            widget.blockSignals(False)
+        self.lbl_aberration.setText(f"Star aberration fix: {a}")
+        self.lbl_shape.setText(f"Star shape fix: {s}")
+        if notify:
+            self._notify_change()
+
+    def get_values(self) -> tuple[float, float]:
+        aberration = float(self.sld_aberration.value()) / 100.0
+        shape = float(self.sld_shape.value()) / 100.0
+        return aberration, shape
+
+    def _notify_change(self):
+        if callable(self._on_change_callback):
+            aberration, shape = self.get_values()
+            self._on_change_callback(aberration, shape)
+
+    def _on_aberration_changed(self, value: int):
+        self.lbl_aberration.setText(f"Star aberration fix: {int(value)}")
+        self._notify_change()
+
+    def _on_shape_changed(self, value: int):
+        self.lbl_shape.setText(f"Star shape fix: {int(value)}")
+        self._notify_change()
+
+    def _apply(self):
+        if callable(self._on_apply_callback):
+            self._on_apply_callback()
+
+    def _reset(self):
+        self.set_values(0.0, 0.0, notify=False)
+        if callable(self._on_reset_callback):
+            self._on_reset_callback()
+
 class ColorCalibrationDialog(QDialog):
     requestRoiPick = pyqtSignal()
     roiChanged = pyqtSignal(int, int, int, int)
@@ -14399,6 +15418,8 @@ class AstroApp(QMainWindow):
         params["calibration_red"] = float(gains.get("r", 0.0))
         params["calibration_green"] = float(gains.get("g", 0.0))
         params["calibration_blue"] = float(gains.get("b", 0.0))
+        params["star_aberration"] = float(np.clip(getattr(self, "star_aberration_strength", 0.0), 0.0, 1.0))
+        params["star_shape"] = float(np.clip(getattr(self, "star_shape_strength", 0.0), 0.0, 1.0))
         return params
 
     def apply_full_processing(self):
@@ -14597,6 +15618,10 @@ class AstroApp(QMainWindow):
     def reset_all_sliders(self):
         self.last_color_calibration_method = None
         self.background_calibration_rgb = {"r": 0.0, "g": 0.0, "b": 0.0}
+        self.star_aberration_strength = 0.0
+        self.star_shape_strength = 0.0
+        if getattr(self, "star_correction_dialog", None) is not None:
+            self.star_correction_dialog.set_values(0.0, 0.0, notify=False)
         self.set_ghs_params(self._default_ghs_params(), apply_processing=False)
         if hasattr(self, "ghs_dialog") and self.ghs_dialog is not None:
             self.ghs_dialog.set_params(self.ghs_params, notify=False)
@@ -14866,10 +15891,7 @@ class AstroApp(QMainWindow):
 
         self.setWindowTitle("Astro Ai Plus v1.0.0")
 
-        icon_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "main_icon.ico"
-        )
+        icon_path = get_app_icon_path()
 
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
@@ -14892,6 +15914,7 @@ class AstroApp(QMainWindow):
         self.layer_titles = {
             "background": "Background",
             "blur": "Gaussian Blur",
+            "local_contrast": "Local Contrast Enhancement",
             "stars": "Stars",
             "curves": "Curves",
             "plate_solve_overlay": "Plate Solve Overlay",
@@ -14903,6 +15926,7 @@ class AstroApp(QMainWindow):
         self.layer_visibility = {
             "background": True,
             "blur": True,
+            "local_contrast": True,
             "stars": True,
             "curves": True,
             "plate_solve_overlay": False,
@@ -14935,6 +15959,7 @@ class AstroApp(QMainWindow):
         self.layer_types = {
             "background": "raster",
             "blur": "effect",
+            "local_contrast": "effect",
             "stars": "effect",
             "curves": "adjustment",
             "plate_solve_overlay": "overlay",
@@ -14955,13 +15980,16 @@ class AstroApp(QMainWindow):
         self.plate_solve_object_info = {}
         self.ai_assistant_panel = None
         self.blur_dialog = None
+        self.local_contrast_dialog = None
         self.crop_dialog = None
         self.color_calibration_dialog = None
+        self.star_correction_dialog = None
         self.plate_solve_dialog = None
         self.starnet_dialog = None
         self.deepsnr_dialog = None
         self.mosaic_dialog = None
         self.stack_dialog = None
+        self.solar_stack_dialog = None
         self.fly3d_dialog = None
         self.preferences_dialog = None
         self.active_image_window = None
@@ -15000,6 +16028,8 @@ class AstroApp(QMainWindow):
         self.last_corrections_snapshot = None  # Snapshot poprzednich wartoĹ›ci
         self.last_color_calibration_method = None
         self.background_calibration_rgb = {"r": 0.0, "g": 0.0, "b": 0.0}
+        self.star_aberration_strength = 0.0
+        self.star_shape_strength = 0.0
 
         # ---------- modele ----------
         self.denoise_model_path = None
@@ -15008,17 +16038,24 @@ class AstroApp(QMainWindow):
         self.deepsnr_path = None
         self.deepsnr_args = DEFAULT_DEEPSNR_ARGS
         self.starnet_generate_starmask = False
+        self.starnet_prestretch_linear = False
         self.mosaic_mode = "auto"
         self.mosaic_sort_by_name = True
+        self.mosaic_input_paths = []
         self.stack_method = "median"
         self.stack_align_frames = True
         self.stack_use_calibration = False
         self.stack_bayer_pattern = "AUTO"
         self.stack_input_paths = []
+        self.solar_stack_method = "median"
+        self.solar_stack_align_frames = True
+        self.solar_stack_bayer_pattern = "AUTO"
+        self.solar_stack_source_path = ""
         self.starnet_stride = 16
 
         # ---------- theme ----------
         self.theme_name = "Fusion Dark"
+        self.accent_name = "Ultra Blue"
         self.language = "pl"
         self.processor_cores = max(1, (os.cpu_count() or 4) // 2)
         self.onnx_provider = "Auto"
@@ -15034,6 +16071,7 @@ class AstroApp(QMainWindow):
         self.deepsnr_args = normalize_deepsnr_args(config.get("deepsnr_args", DEFAULT_DEEPSNR_ARGS))
         self.starnet_stride = int(config.get("starnet_stride") or 16)
         self.theme_name = config.get("theme_name") or ("Fusion Dark" if config.get("dark_mode", True) else "Light")
+        self.accent_name = normalize_accent_name(config.get("accent_name", "Ultra Blue"))
         self.language = config.get("language", "pl") or "pl"
         self.processor_cores = int(config.get("processor_cores") or self.processor_cores)
         self.onnx_provider = config.get("onnx_provider", "Auto") or "Auto"
@@ -15052,6 +16090,7 @@ class AstroApp(QMainWindow):
         APP_PREFERENCES["workspaces"] = self.workspaces
         APP_PREFERENCES["home_folder"] = self.home_folder
         APP_PREFERENCES["topbar_button_order"] = list(self.topbar_button_order)
+        APP_PREFERENCES["accent_name"] = self.accent_name
         APP_PREFERENCES["deepsnr_path"] = self.deepsnr_path
         APP_PREFERENCES["deepsnr_args"] = self.deepsnr_args
         self.ghs_params = self._default_ghs_params()
@@ -15127,6 +16166,11 @@ class AstroApp(QMainWindow):
             self.blur_dialog = BlurDialog(self)
         return self.blur_dialog
 
+    def _get_local_contrast_dialog(self):
+        if self.local_contrast_dialog is None:
+            self.local_contrast_dialog = LocalContrastDialog(self)
+        return self.local_contrast_dialog
+
     def _get_crop_dialog(self):
         if self.crop_dialog is None:
             self.crop_dialog = CropDialog(self)
@@ -15145,6 +16189,21 @@ class AstroApp(QMainWindow):
             self.color_calibration_dialog.roiChanged.connect(self._on_bn_roi_from_dialog_changed)
             self.color_calibration_dialog.finished.connect(self._on_color_calibration_dialog_closed)
         return self.color_calibration_dialog
+
+    def _get_star_correction_dialog(self):
+        if self.star_correction_dialog is None:
+            self.star_correction_dialog = StarCorrectionDialog(
+                on_change_callback=self._on_star_correction_values_changed,
+                on_apply_callback=self.apply_star_correction_from_dialog,
+                on_reset_callback=self.reset_star_correction,
+                parent=self,
+            )
+        self.star_correction_dialog.set_values(
+            getattr(self, "star_aberration_strength", 0.0),
+            getattr(self, "star_shape_strength", 0.0),
+            notify=False,
+        )
+        return self.star_correction_dialog
 
     def _get_plate_solve_dialog(self):
         if self.plate_solve_dialog is None:
@@ -15169,12 +16228,14 @@ class AstroApp(QMainWindow):
                 stride=self.starnet_stride,
                 starnet_path=self.starnet_path,
                 generate_starmask=bool(getattr(self, "starnet_generate_starmask", False)),
+                prestretch_linear=bool(getattr(self, "starnet_prestretch_linear", False)),
             )
         else:
             self.starnet_dialog.set_parameters(
                 self.starnet_stride,
                 self.starnet_path,
                 generate_starmask=bool(getattr(self, "starnet_generate_starmask", False)),
+                prestretch_linear=bool(getattr(self, "starnet_prestretch_linear", False)),
             )
         return self.starnet_dialog
 
@@ -15195,12 +16256,14 @@ class AstroApp(QMainWindow):
                 self,
                 mode=getattr(self, "mosaic_mode", "auto"),
                 sort_by_name=bool(getattr(self, "mosaic_sort_by_name", True)),
+                selected_files=getattr(self, "mosaic_input_paths", []),
             )
         else:
             self.mosaic_dialog.set_parameters(
                 mode=getattr(self, "mosaic_mode", "auto"),
                 sort_by_name=bool(getattr(self, "mosaic_sort_by_name", True)),
             )
+            self.mosaic_dialog.set_selected_files(getattr(self, "mosaic_input_paths", []))
         return self.mosaic_dialog
 
     def _get_stack_dialog(self):
@@ -15222,6 +16285,24 @@ class AstroApp(QMainWindow):
             )
             self.stack_dialog.set_selected_files(getattr(self, "stack_input_paths", []))
         return self.stack_dialog
+
+    def _get_solar_stack_dialog(self):
+        if self.solar_stack_dialog is None:
+            self.solar_stack_dialog = SolarVideoStackDialog(
+                self,
+                method=getattr(self, "solar_stack_method", "median"),
+                align_frames=bool(getattr(self, "solar_stack_align_frames", True)),
+                bayer_pattern=getattr(self, "solar_stack_bayer_pattern", "AUTO"),
+                source_path=getattr(self, "solar_stack_source_path", ""),
+            )
+        else:
+            self.solar_stack_dialog.set_parameters(
+                method=getattr(self, "solar_stack_method", "median"),
+                align_frames=bool(getattr(self, "solar_stack_align_frames", True)),
+                bayer_pattern=getattr(self, "solar_stack_bayer_pattern", "AUTO"),
+                source_path=getattr(self, "solar_stack_source_path", ""),
+            )
+        return self.solar_stack_dialog
 
     def _get_fly3d_dialog(self):
         source = self.get_effective_magic_img() if self.magic_img is not None else None
@@ -15591,6 +16672,9 @@ class AstroApp(QMainWindow):
         if lower in ("blur", "gaussian blur", "gaussian"):
             self.apply_gaussian_blur_filter()
             return
+        if lower in ("local contrast", "local contrast enhancement", "lce"):
+            self.apply_local_contrast_filter()
+            return
         if lower in ("rotate", "rotation"):
             self.rotate_image_dialog()
             return
@@ -15602,6 +16686,19 @@ class AstroApp(QMainWindow):
             return
         if lower in ("stack", "stacking", "stack frames", "stackowanie", "stackuj"):
             self.create_stack_from_frames()
+            return
+        if lower in (
+            "solar stack",
+            "solarstack",
+            "run solar stack",
+            "run.solarstack",
+            "planetary stack",
+            "planetarystack",
+            "planet stack",
+            "lunar stack",
+            "moon stack",
+        ):
+            self.create_stack_from_solar_video()
             return
         if lower in ("levels", "level"):
             self.show_levels_window()
@@ -15629,6 +16726,15 @@ class AstroApp(QMainWindow):
             return
         if lower in ("correction", "correct", "camera raw"):
             self.show_correction_panels()
+            return
+        if lower in (
+            "star correction",
+            "starcorrection",
+            "open.starcorrection",
+            "open.star_correction",
+            "korekcja gwiazd",
+        ):
+            self.show_star_correction_dialog()
             return
         if lower in ("bn", "background neutralization", "background neutralisation"):
             self.apply_background_neutralization()
@@ -15680,10 +16786,12 @@ class AstroApp(QMainWindow):
             "3d fly                   render starless 3D fly-through clip",
             "analyze / analizuj       compute FWHM and image metrics",
             "blur                     open Gaussian Blur dialog",
+            "local contrast / lce     open Local Contrast Enhancement dialog",
             "rotate                   open Rotate dialog",
             "crop                     open Crop dialog",
             "mosaic / mozaika         stitch many frames into one image",
             "stack / stackowanie      stack many frames into one image",
+            "solar stack              stack AVI/SER for Sun, planets, Moon",
             "levels                   open Levels window",
             "menu                     open Menu dialog",
             "curves / lut             open Curves (LUT) window",
@@ -15692,6 +16800,7 @@ class AstroApp(QMainWindow):
             "curves reset             reset the Curves LUT",
             "histogram                open Histogram window",
             "correction               open correction panels",
+            "star correction          open Star Correction window",
             "bn                       run Background Neutralization",
             "calibration              open Background Neutralization dialog",
             "reset                    reset correction sliders",
@@ -15745,6 +16854,10 @@ class AstroApp(QMainWindow):
         else:
             self.preferences_dialog.app = self
             self.preferences_dialog.combo_theme.setCurrentText(self.theme_name)
+            if hasattr(self.preferences_dialog, "combo_accent"):
+                self.preferences_dialog.combo_accent.setCurrentText(normalize_accent_name(self.accent_name))
+                if hasattr(self.preferences_dialog, "_update_accent_preview"):
+                    self.preferences_dialog._update_accent_preview()
             self.preferences_dialog.combo_language.setCurrentText(self.language)
             self.preferences_dialog.spin_cpu_cores.setValue(int(self.processor_cores))
             self.preferences_dialog.combo_onnx_provider.setCurrentText(self.onnx_provider)
@@ -15999,6 +17112,115 @@ class AstroApp(QMainWindow):
                 self.apply_full_processing()
             self.update_menu_actions()
             self.log("Gaussian Blur canceled.")
+            dialog.reset_defaults(emit_preview=False)
+        self._end_dialog_compare(dialog)
+
+    def apply_local_contrast_filter(self):
+        if self.magic_img is None:
+            self.log("Local Contrast skipped: no image loaded.")
+            return
+
+        source_img = self.magic_img.copy()
+        source_img_f = np.clip(source_img.astype(np.float32) / 255.0, 0.0, 1.0)
+        source_pix = np_to_qpixmap(source_img)
+        previous_processed_img = None if self.processed_img is None else self.processed_img.copy()
+        previous_after_pix = None if previous_processed_img is None else np_to_qpixmap(previous_processed_img)
+        stars_mask = self.layer_masks.get("stars")
+        stars_mask_f = _normalize_mask01(stars_mask, source_img.shape[:2], np.float32)
+        last_preview = {"params": None, "magic_img": None, "processed_img": None}
+
+        def preview_lce(params: dict):
+            radius = float(params.get("radius", 35.0))
+            strength = float(params.get("strength", 0.4))
+            protect_background = bool(params.get("protect_background", True))
+            protect_stars = bool(params.get("protect_stars", True))
+            active_star_mask = stars_mask_f if protect_stars else None
+
+            enhanced_f = local_contrast_enhancement(
+                source_img_f,
+                radius_px=radius,
+                strength=strength,
+                protect_background=protect_background,
+                protect_stars=protect_stars,
+                star_mask=active_star_mask,
+                low_threshold=0.03,
+                high_threshold=0.15,
+            )
+            enhanced = np.clip(np.round(enhanced_f * 255.0), 0, 255).astype(np.uint8)
+            lce_mask = self.layer_masks.get("local_contrast")
+            self.magic_img = self._apply_mask_blend(source_img, enhanced, lce_mask) if lce_mask is not None else enhanced
+            self.levels_window.levels_widget.set_image(self.magic_img)
+            self.preview_override_img = self.magic_img.copy()
+            self.viewer.set_before(source_pix)
+            self.apply_full_processing()
+            last_preview["params"] = {
+                "radius": radius,
+                "strength_percent": int(np.clip(round(strength * 100.0), 0, 200)),
+                "protect_background": protect_background,
+                "protect_stars": protect_stars,
+            }
+            last_preview["magic_img"] = self.magic_img.copy()
+            last_preview["processed_img"] = None if self.processed_img is None else self.processed_img.copy()
+
+        dialog = self._get_local_contrast_dialog()
+        dialog.set_preview_callback(preview_lce)
+        self._begin_dialog_compare(dialog)
+        self.log("Local Contrast dialog opened.")
+
+        current_params = dialog.get_values()
+        preview_lce(current_params)
+
+        if dialog.exec_() == QDialog.Accepted:
+            dialog.preview_timer.stop()
+            params = dialog.get_values()
+            normalized_params = {
+                "radius": float(params.get("radius", 35.0)),
+                "strength_percent": int(np.clip(round(float(params.get("strength", 0.4)) * 100.0), 0, 200)),
+                "protect_background": bool(params.get("protect_background", True)),
+                "protect_stars": bool(params.get("protect_stars", True)),
+            }
+            if last_preview["params"] != normalized_params:
+                preview_lce(params)
+            else:
+                self.magic_img = last_preview["magic_img"]
+                self.processed_img = last_preview["processed_img"]
+
+            self.undo_stack.append(source_img)
+            self.redo_stack.clear()
+            self.levels_window.levels_widget.set_image(self.magic_img)
+            self.preview_override_img = None
+            self.add_layer("local_contrast", self.magic_img)
+
+            self.viewer.set_before(np_to_qpixmap(self.magic_img))
+            self.apply_full_processing()
+
+            radius = float(params.get("radius", 35.0))
+            strength_pct = int(np.clip(round(float(params.get("strength", 0.4)) * 100.0), 0, 200))
+            bg_state = "ON" if bool(params.get("protect_background", True)) else "OFF"
+            star_state = "ON" if bool(params.get("protect_stars", True)) else "OFF"
+            self.add_thumbnail(
+                f"Local Contrast (R:{radius:.0f}px, S:{strength_pct}%, BG:{bg_state}, Stars:{star_state})",
+                self.processed_img,
+            )
+            self.update_menu_actions()
+            self.log(
+                f"Local Contrast applied. Radius: {radius:.0f}px, Strength: {strength_pct}%, "
+                f"Protect BG: {bg_state}, Protect Stars: {star_state}"
+            )
+            dialog.reset_defaults(emit_preview=False)
+        else:
+            dialog.preview_timer.stop()
+            self.preview_override_img = None
+            self.magic_img = source_img
+            self.processed_img = previous_processed_img
+            self.levels_window.levels_widget.set_image(self.magic_img)
+            self.viewer.set_before(source_pix)
+            if previous_after_pix is not None:
+                self.viewer.set_after(previous_after_pix)
+            else:
+                self.apply_full_processing()
+            self.update_menu_actions()
+            self.log("Local Contrast canceled.")
             dialog.reset_defaults(emit_preview=False)
         self._end_dialog_compare(dialog)
 
@@ -16294,16 +17516,19 @@ class AstroApp(QMainWindow):
             ("action_deepsnr", "action_deepsnr", "Run deepSNR"),
             ("action_3d_fly", "action_3d_fly", "3D FLY Filter"),
             ("action_correction", "action_correction", "Correction"),
+            ("action_star_correction", "action_star_correction", "Star Correction"),
             ("action_color_calibration", "action_color_calibration", "Color Calibration"),
             ("action_levels", "action_levels", "Levels"),
             ("action_curves", "action_curves", "Curves (LUT)"),
             ("action_ghs", "action_ghs", "GHS Stretch"),
             ("action_auto_stretch", "action_auto_stretch", "AutoStretch"),
             ("action_blur", "action_blur", "Gaussian Blur"),
+            ("action_local_contrast", "action_local_contrast", "Local Contrast Enhancement"),
             ("action_rotate", "action_rotate", "Rotate"),
             ("action_crop", "action_crop", "Crop"),
             ("action_mosaic", "action_mosaic", "Frame Mosaic"),
             ("action_stack", "action_stack", "Frame Stack"),
+            ("action_solar_stack", "action_solar_stack", "Planetary Stack"),
         ]
         for attr, key, default in action_map:
             action = getattr(self, attr, None)
@@ -16333,11 +17558,14 @@ class AstroApp(QMainWindow):
             ("btn_deepsnr_top", "top_deepsnr", "deepSNR"),
             ("btn_3d_fly_top", "top_3d_fly", "3D FLY"),
             ("btn_blur_top", "top_blur", "Blur"),
+            ("btn_local_contrast_top", "top_local_contrast", "Local"),
             ("btn_rotate_top", "top_rotate", "Rotate"),
             ("btn_crop_top", "top_crop", "Crop"),
             ("btn_mosaic_top", "top_mosaic", "Mosaic"),
             ("btn_stack_top", "top_stack_frames", "Stack"),
+            ("btn_solar_stack_top", "top_solar_stack", "Planetary"),
             ("btn_corr_top", "top_correction", "Correction"),
+            ("btn_star_corr_top", "top_star_correction", "Stars"),
             ("btn_calib_top", "top_color_calibration", "Calibration"),
             ("btn_levels_top", "top_levels", "Levels"),
             ("btn_curves_top", "top_curves", "Curves"),
@@ -16375,6 +17603,7 @@ class AstroApp(QMainWindow):
         self._translate_widgets_recursive(self)
         for dialog_name in (
             "correction_dialog",
+            "star_correction_dialog",
             "color_calibration_dialog",
             "histogram_window",
             "console_window",
@@ -16402,7 +17631,7 @@ class AstroApp(QMainWindow):
         self.theme_name = "Fusion Dark" if enabled else "Light"
         self.dark_mode = enabled
         APP_PREFERENCES["theme_name"] = self.theme_name
-        apply_theme_application(app, self.theme_name)
+        apply_theme_application(app, self.theme_name, self.accent_name)
 
     def toggle_dark_mode(self):
         """Toggle dark mode on/off"""
@@ -16410,9 +17639,11 @@ class AstroApp(QMainWindow):
         self.apply_preferences(theme_name=self.theme_name)
         self.log(f"Theme switched to {self.theme_name}.")
 
-    def apply_preferences(self, theme_name=None, language=None, processor_cores=None, onnx_provider=None, gemini_api_key=None):
+    def apply_preferences(self, theme_name=None, accent_name=None, language=None, processor_cores=None, onnx_provider=None, gemini_api_key=None):
         if theme_name is not None:
             self.theme_name = theme_name
+        if accent_name is not None:
+            self.accent_name = normalize_accent_name(accent_name)
         if language is not None:
             self.language = language
         if processor_cores is not None:
@@ -16425,6 +17656,7 @@ class AstroApp(QMainWindow):
         self.dark_mode = (self.theme_name or "").strip().lower() != "light"
         APP_PREFERENCES.update({
             "theme_name": self.theme_name,
+            "accent_name": self.accent_name,
             "language": self.language,
             "processor_cores": self.processor_cores,
             "onnx_provider": self.onnx_provider,
@@ -16432,7 +17664,7 @@ class AstroApp(QMainWindow):
 
         app = QApplication.instance()
         if app is not None:
-            apply_theme_application(app, self.theme_name)
+            apply_theme_application(app, self.theme_name, self.accent_name)
         self._update_ui_language()
 
         save_config(
@@ -16447,6 +17679,7 @@ class AstroApp(QMainWindow):
             self.gemini_api_key,
             self.gemini_model,
             theme_name=self.theme_name,
+            accent_name=self.accent_name,
             language=self.language,
             processor_cores=self.processor_cores,
             onnx_provider=self.onnx_provider,
@@ -16467,6 +17700,7 @@ class AstroApp(QMainWindow):
             self.gemini_api_key,
             self.gemini_model,
             theme_name=self.theme_name,
+            accent_name=self.accent_name,
             language=self.language,
             processor_cores=self.processor_cores,
             onnx_provider=self.onnx_provider,
@@ -16524,6 +17758,7 @@ class AstroApp(QMainWindow):
             "histogram": lambda: self.histogram_window,
             "console": lambda: self.console_window,
             "menu": lambda: self.photoshop_menu_dialog,
+            "star_correction": lambda: self._get_star_correction_dialog(),
             "color_calibration": lambda: self._get_color_calibration_dialog(),
         }
         opener = openers.get(dialog_key)
@@ -16542,6 +17777,7 @@ class AstroApp(QMainWindow):
             "histogram": self.histogram_window,
             "console": self.console_window,
             "menu": self.photoshop_menu_dialog,
+            "star_correction": self.star_correction_dialog,
             "color_calibration": self.color_calibration_dialog,
         }
         return dialogs.get(dialog_key)
@@ -16635,6 +17871,38 @@ class AstroApp(QMainWindow):
         self.correction_dialog.raise_()
         self.correction_dialog.activateWindow()
         self.log("Correction window opened.")
+
+    def show_star_correction_dialog(self):
+        dialog = self._get_star_correction_dialog()
+        self._begin_dialog_compare(dialog)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        self.log("Star correction window opened.")
+
+    def _on_star_correction_values_changed(self, aberration: float, shape: float):
+        self.star_aberration_strength = float(np.clip(aberration, 0.0, 1.0))
+        self.star_shape_strength = float(np.clip(shape, 0.0, 1.0))
+        self.apply_full_processing()
+
+    def apply_star_correction_from_dialog(self):
+        self.apply_full_processing()
+        if self.processed_img is not None:
+            self.add_thumbnail("Star Correction", self.processed_img)
+        self.log(
+            f"Star correction applied. Aberration: {self.star_aberration_strength:.2f}, "
+            f"Shape: {self.star_shape_strength:.2f}",
+            "success",
+        )
+
+    def reset_star_correction(self):
+        self.star_aberration_strength = 0.0
+        self.star_shape_strength = 0.0
+        dialog = getattr(self, "star_correction_dialog", None)
+        if dialog is not None:
+            dialog.set_values(0.0, 0.0, notify=False)
+        self.apply_full_processing()
+        self.log("Star correction reset.")
 
     def show_color_calibration_dialog(self):
         dialog = self._get_color_calibration_dialog()
@@ -17413,6 +18681,9 @@ class AstroApp(QMainWindow):
         self.action_correction = QAction("Correction", self)
         self.action_correction.triggered.connect(self.show_correction_panels)
 
+        self.action_star_correction = QAction("Star Correction", self)
+        self.action_star_correction.triggered.connect(self.show_star_correction_dialog)
+
         self.action_color_calibration = QAction("Color Calibration", self)
         self.action_color_calibration.triggered.connect(self.show_color_calibration_dialog)
 
@@ -17432,6 +18703,10 @@ class AstroApp(QMainWindow):
         self.action_blur.triggered.connect(self.apply_gaussian_blur_filter)
         self.action_blur.setEnabled(False)
 
+        self.action_local_contrast = QAction("Local Contrast Enhancement", self)
+        self.action_local_contrast.triggered.connect(self.apply_local_contrast_filter)
+        self.action_local_contrast.setEnabled(False)
+
         self.action_rotate = QAction("Rotate", self)
         self.action_rotate.triggered.connect(self.rotate_image_dialog)
         self.action_rotate.setEnabled(False)
@@ -17445,6 +18720,9 @@ class AstroApp(QMainWindow):
 
         self.action_stack = QAction("Frame Stack", self)
         self.action_stack.triggered.connect(self.create_stack_from_frames)
+
+        self.action_solar_stack = QAction("Planetary Stack", self)
+        self.action_solar_stack.triggered.connect(self.create_stack_from_solar_video)
 
         # SkrĂłty klawiszowe dziaĹ‚ajÄ…ce bez MenuBar
         self.addAction(self.action_undo)
@@ -17513,11 +18791,14 @@ class AstroApp(QMainWindow):
         self.btn_deepsnr_top = _add_top_btn("deepSNR", action=self.action_deepsnr)
         self.btn_3d_fly_top = _add_top_btn("3D FLY", action=self.action_3d_fly)
         self.btn_blur_top = _add_top_btn("Blur", action=self.action_blur)
+        self.btn_local_contrast_top = _add_top_btn("Local", action=self.action_local_contrast)
         self.btn_rotate_top = _add_top_btn("Rotate", action=self.action_rotate)
         self.btn_crop_top = _add_top_btn("Crop", action=self.action_crop)
         self.btn_mosaic_top = _add_top_btn("Mosaic", action=self.action_mosaic)
         self.btn_stack_top = _add_top_btn("Stack", action=self.action_stack)
+        self.btn_solar_stack_top = _add_top_btn("Planetary", action=self.action_solar_stack)
         self.btn_corr_top = _add_top_btn("Correction", action=self.action_correction)
+        self.btn_star_corr_top = _add_top_btn("Stars", action=self.action_star_correction)
         self.btn_calib_top = _add_top_btn("Calibration", action=self.action_color_calibration)
         self.btn_levels_top = _add_top_btn("Levels", action=self.action_levels)
         self.btn_curves_top = _add_top_btn("Curves", action=self.action_curves)
@@ -17550,11 +18831,14 @@ class AstroApp(QMainWindow):
             "btn_deepsnr_top",
             "btn_3d_fly_top",
             "btn_blur_top",
+            "btn_local_contrast_top",
             "btn_rotate_top",
             "btn_crop_top",
             "btn_mosaic_top",
             "btn_stack_top",
+            "btn_solar_stack_top",
             "btn_corr_top",
+            "btn_star_corr_top",
             "btn_calib_top",
             "btn_levels_top",
             "btn_curves_top",
@@ -17600,11 +18884,14 @@ class AstroApp(QMainWindow):
             "btn_deepsnr_top": "deepsnr.svg",
             "btn_3d_fly_top": "fly3d.svg",
             "btn_blur_top": "blur.svg",
+            "btn_local_contrast_top": "blur.svg",
             "btn_rotate_top": "rotate.svg",
             "btn_crop_top": "crop.svg",
             "btn_mosaic_top": "mosaic.svg",
             "btn_stack_top": "mosaic.svg",
+            "btn_solar_stack_top": "solar_stack.svg",
             "btn_corr_top": "correction.svg",
+            "btn_star_corr_top": "stars.svg",
             "btn_calib_top": "correction.svg",
             "btn_levels_top": "levels.svg",
             "btn_curves_top": "curves.svg",
@@ -17877,14 +19164,19 @@ class AstroApp(QMainWindow):
             return
 
         dialog = self._get_mosaic_dialog()
+        dialog.set_selected_files(paths)
         if dialog.exec_() != QDialog.Accepted:
             self.log("Mosaic settings canceled.", "warning")
             return
         params = dialog.get_parameters()
         mode_key = str(params.get("mode") or "auto").strip().lower()
         sort_by_name = bool(params.get("sort_by_name", True))
+        ordered_paths = [str(path or "").strip() for path in (params.get("ordered_paths") or []) if str(path or "").strip()]
+        if ordered_paths:
+            paths = ordered_paths
         self.mosaic_mode = mode_key
         self.mosaic_sort_by_name = sort_by_name
+        self.mosaic_input_paths = list(paths)
 
         if sort_by_name:
             paths = sorted(paths, key=lambda p: os.path.basename(p).lower())
@@ -18357,6 +19649,243 @@ class AstroApp(QMainWindow):
                 preview += ", ..."
             self.log(f"Skipped frames with different size: {preview}", "warning")
 
+    def create_stack_from_solar_video(self):
+        dialog = self._get_solar_stack_dialog()
+        if dialog.exec_() != QDialog.Accepted:
+            self.log("Planetary stacking canceled.", "warning")
+            return
+
+        params = dialog.get_parameters()
+        source_path = str(params.get("source_path") or "").strip()
+        if not source_path:
+            self.log("Planetary stacking canceled: no AVI/SER source selected.", "warning")
+            return
+
+        source_path = os.path.abspath(source_path)
+        if not os.path.isfile(source_path):
+            self.log("Planetary stacking failed: source file does not exist.", "error")
+            return
+        if not (_is_video_path(source_path) or _is_ser_path(source_path)):
+            self.log("Planetary stacking failed: only AVI/SER files are supported.", "error")
+            return
+
+        method_key = str(params.get("method") or "median").strip().lower()
+        method_key = "average" if method_key == "average" else "median"
+        align_frames = bool(params.get("align_frames", True))
+        bayer_pattern = str(params.get("bayer_pattern") or "AUTO").strip().upper()
+
+        self.solar_stack_method = method_key
+        self.solar_stack_align_frames = align_frames
+        self.solar_stack_bayer_pattern = bayer_pattern
+        self.solar_stack_source_path = source_path
+
+        stack_progress_dialog = MagicProgressDialog(self)
+        stack_progress_dialog.setWindowTitle("Video Stacking Progress")
+        stack_progress_dialog.set_current_indeterminate(True, "1/4 Dodaj video: inicjalizacja...")
+        stack_progress_dialog.update_progress("1/4 Dodaj video", 1, 0)
+        stack_progress_dialog.show()
+        QApplication.processEvents()
+
+        def _stack_progress(
+            stage_name: str,
+            overall_value: int,
+            current_value: int = 0,
+            current_text: str = "",
+            indeterminate: bool = None,
+            visual_stage: str = "",
+        ):
+            if visual_stage:
+                stack_progress_dialog.set_visual_stage(visual_stage)
+            if indeterminate is not None:
+                stack_progress_dialog.set_current_indeterminate(bool(indeterminate), current_text)
+            elif current_text:
+                stack_progress_dialog.label_current.setText(current_text)
+            stack_progress_dialog.update_progress(stage_name, int(overall_value), int(current_value))
+
+        forced_bayer_pattern = normalize_bayer_pattern(bayer_pattern)
+
+        _stack_progress("1/4 Dodaj video", 5, 0, "Wczytywanie klatek AVI/SER...", indeterminate=False, visual_stage="loading")
+        try:
+            if _is_ser_path(source_path):
+                raw_frames, ser_pattern = read_frames_from_ser(source_path)
+                detected_pattern = forced_bayer_pattern or ser_pattern
+            else:
+                raw_frames = read_frames_from_avi(source_path)
+                detected_pattern = ""
+        except Exception as exc:
+            stack_progress_dialog.close()
+            self.log(f"Planetary stacking failed: {exc}", "error")
+            return
+
+        frames = []
+        frame_bayer_patterns = []
+        reference_shape = None
+        reference_ndim = None
+        mismatched_count = 0
+
+        total_raw = max(1, len(raw_frames))
+        for idx, frame_raw in enumerate(raw_frames, start=1):
+            try:
+                if frame_raw is None or getattr(frame_raw, "size", 0) == 0:
+                    raise RuntimeError("empty frame")
+                if frame_raw.ndim == 2:
+                    frame = normalize_to_uint8_gray(frame_raw)
+                    pattern = detected_pattern
+                elif frame_raw.ndim == 3:
+                    frame = normalize_to_uint8_bgr(frame_raw)
+                    pattern = ""
+                else:
+                    raise RuntimeError("unsupported frame dimensions")
+
+                if reference_shape is None:
+                    reference_shape = frame.shape[:2]
+                    reference_ndim = frame.ndim
+                if frame.shape[:2] != reference_shape or frame.ndim != reference_ndim:
+                    mismatched_count += 1
+                else:
+                    frames.append(frame)
+                    frame_bayer_patterns.append(pattern)
+            except Exception:
+                mismatched_count += 1
+
+            pct = int(round(idx * 100.0 / total_raw))
+            overall = 5 + int(round(pct * 0.20))
+            _stack_progress("1/4 Dodaj video", overall, pct, f"Klatka {idx}/{total_raw}", visual_stage="loading")
+
+        if len(frames) < 2:
+            stack_progress_dialog.close()
+            self.log("Planetary stacking failed: not enough valid frames in source.", "error")
+            return
+
+        _stack_progress(
+            "2/4 Analizuj",
+            55,
+            100,
+            f"Poprawne klatki: {len(frames)}/{total_raw}",
+            indeterminate=False,
+            visual_stage="calibration",
+        )
+
+        all_single_channel = all(frame.ndim == 2 for frame in frames)
+        cfa_mode = all_single_channel and any(bool(pattern) for pattern in frame_bayer_patterns)
+        common_bayer_pattern = ""
+        if cfa_mode:
+            pattern_candidates = [pattern for pattern in frame_bayer_patterns if pattern]
+            common_bayer_pattern = pattern_candidates[0] if pattern_candidates else ""
+            if not common_bayer_pattern:
+                cfa_mode = False
+            else:
+                inconsistent = [p for p in pattern_candidates if p != common_bayer_pattern]
+                if inconsistent:
+                    stack_progress_dialog.close()
+                    self.log("Planetary stacking failed: inconsistent Bayer patterns in frames.", "error")
+                    return
+                missing_count = sum(1 for pattern in frame_bayer_patterns if not pattern)
+                if missing_count > 0:
+                    self.log(
+                        f"Bayer pattern inferred as {common_bayer_pattern} for {missing_count} frame(s) without metadata.",
+                        "warning",
+                    )
+                self.log(f"Planetary CFA pipeline active. Debayer pattern: {common_bayer_pattern}.", "info")
+
+        if cfa_mode and common_bayer_pattern:
+            debayer_failures = 0
+            debayered_frames = []
+            total_frames = max(1, len(frames))
+            _stack_progress("3/4 Dodaj punkty wyrównania", 63, 0, "Przygotowanie klatek CFA...", indeterminate=False, visual_stage="debayer")
+            for idx, frame in enumerate(frames, start=1):
+                try:
+                    debayered = debayer_bayer_frame(frame, common_bayer_pattern)
+                    debayered_frames.append(debayered)
+                except Exception:
+                    debayer_failures += 1
+                    debayered_frames.append(cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR))
+                pct = int(round(idx * 100.0 / total_frames))
+                overall = 63 + int(round(pct * 0.07))
+                _stack_progress("3/4 Dodaj punkty wyrównania", overall, pct, f"Klatka CFA {idx}/{total_frames}", visual_stage="debayer")
+            frames = debayered_frames
+            if debayer_failures > 0:
+                self.log(f"Debayer fallback used for {debayer_failures} frame(s).", "warning")
+        elif all(frame.ndim == 2 for frame in frames):
+            _stack_progress("3/4 Dodaj punkty wyrównania", 69, 0, "Przygotowanie klatek mono...", indeterminate=False, visual_stage="debayer")
+            frames = [cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR) for frame in frames]
+            _stack_progress("3/4 Dodaj punkty wyrównania", 70, 100, "Mono gotowe", visual_stage="debayer")
+
+        frame_stack = [frames[0].astype(np.float32)]
+        alignment_failures = 0
+
+        if align_frames:
+            ref_gray = cv2.cvtColor(frames[0], cv2.COLOR_BGR2GRAY).astype(np.float32)
+            total_align = max(1, len(frames) - 1)
+            _stack_progress("3/4 Dodaj punkty wyrównania", 72, 0, "Wyrównywanie klatek...", indeterminate=False, visual_stage="align")
+            for idx, frame in enumerate(frames[1:], start=1):
+                try:
+                    current_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+                    shift, _response = cv2.phaseCorrelate(ref_gray, current_gray)
+                    dx = float(shift[0])
+                    dy = float(shift[1])
+                    matrix = np.float32([[1.0, 0.0, -dx], [0.0, 1.0, -dy]])
+                    aligned = cv2.warpAffine(
+                        frame,
+                        matrix,
+                        (frame.shape[1], frame.shape[0]),
+                        flags=cv2.INTER_LINEAR,
+                        borderMode=cv2.BORDER_REFLECT101,
+                    )
+                    frame_stack.append(aligned.astype(np.float32))
+                except Exception:
+                    frame_stack.append(frame.astype(np.float32))
+                    alignment_failures += 1
+                pct = int(round(idx * 100.0 / total_align))
+                overall = 72 + int(round(pct * 0.18))
+                _stack_progress("3/4 Dodaj punkty wyrównania", overall, pct, f"Wyrównana klatka {idx}/{total_align}", visual_stage="align")
+        else:
+            _stack_progress("3/4 Dodaj punkty wyrównania", 72, 100, "Wyrównanie wyłączone", indeterminate=False, visual_stage="align")
+            frame_stack.extend(frame.astype(np.float32) for frame in frames[1:])
+
+        _stack_progress("4/4 Stack", 92, 0, "Liczenie finalnego stacka...", indeterminate=True, visual_stage="stacking")
+        cube = np.stack(frame_stack, axis=0)
+        if method_key == "median":
+            stacked = np.median(cube, axis=0)
+        else:
+            stacked = np.mean(cube, axis=0)
+        stacked = np.clip(stacked, 0, 255).astype(np.uint8)
+        _stack_progress("4/4 Stack", 97, 100, "Finalizacja wyniku", indeterminate=False, visual_stage="stacking")
+
+        self.magic_img = stacked
+        self.original_img = stacked.copy()
+        self.processed_img = stacked.copy()
+        self.current_image_path = ""
+        self.current_save_path = None
+        self.latest_image_analysis = {}
+        self.analysis_dirty = True
+
+        if hasattr(self, "undo_stack"):
+            self.undo_stack.clear()
+        if hasattr(self, "redo_stack"):
+            self.redo_stack.clear()
+        if hasattr(self, "processing_history"):
+            self.processing_history.clear()
+        self.thumbnail_next_id = 1
+        self.selected_thumbnail_index = -1
+        self.current_history_node_id = None
+
+        self.viewer.set_before(np_to_qpixmap(self.processed_img))
+        self.update_menu_actions()
+        self.apply_full_processing()
+
+        _stack_progress("4/4 Stack", 100, 100, "Gotowe", indeterminate=False, visual_stage="finished")
+        stack_progress_dialog.close()
+
+        self.add_thumbnail(f"Planetary Stack ({len(frame_stack)} frames)", self.processed_img)
+        mode_name = "median" if method_key == "median" else "average"
+        align_name = "aligned" if align_frames else "no alignment"
+        self.log(f"Planetary stack ready: {len(frame_stack)} frames ({mode_name}, {align_name}).", "success")
+        if alignment_failures > 0:
+            self.log(f"Alignment fallback used for {alignment_failures} frame(s).", "warning")
+        if mismatched_count > 0:
+            self.log(f"Skipped invalid/mismatched frames: {mismatched_count}", "warning")
+
     def _handle_dropped_images(self, paths):
         if not paths:
             self.log("Drop skipped: no valid image files.", "warning")
@@ -18396,12 +19925,29 @@ class AstroApp(QMainWindow):
             return
 
         try:
-            # Bezpieczne odczytanie pliku bajt po bajcie (obsĹ‚uga polskich znakĂłw)
-            img_array = np.fromfile(path, np.uint8)
-            loaded_img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-
-            if loaded_img is None:
-                raise ValueError("Nie udaĹ‚o siÄ™ zdekodowaÄ‡ obrazu. Plik moĹĽe byÄ‡ uszkodzony.")
+            if _is_fits_path(path):
+                loaded_raw, header = safe_fits_read_with_header(path)
+                if loaded_raw is None or getattr(loaded_raw, "size", 0) == 0:
+                    raise ValueError("Nie udaĹ‚o siÄ™ odczytaÄ‡ danych z pliku FITS.")
+                if loaded_raw.ndim == 2:
+                    loaded_img = normalize_to_uint8_bgr(loaded_raw)
+                    detected_pattern = extract_bayer_pattern_from_fits_header(header)
+                    if detected_pattern:
+                        self.log(f"Detected FITS Bayer pattern: {detected_pattern}", "info")
+                elif loaded_raw.ndim == 3:
+                    loaded_img = normalize_to_uint8_bgr(loaded_raw)
+                else:
+                    raise ValueError(f"NieobsĹ‚ugiwany wymiar obrazu FITS: {loaded_raw.shape}")
+            else:
+                loaded_raw = safe_imread(path)
+                if loaded_raw is None or getattr(loaded_raw, "size", 0) == 0:
+                    raise ValueError("Nie udaĹ‚o siÄ™ zdekodowaÄ‡ obrazu. Plik moĹĽe byÄ‡ uszkodzony.")
+                if loaded_raw.ndim == 2:
+                    loaded_img = normalize_to_uint8_bgr(loaded_raw)
+                elif loaded_raw.ndim == 3:
+                    loaded_img = normalize_to_uint8_bgr(loaded_raw)
+                else:
+                    raise ValueError(f"NieobsĹ‚ugiwany wymiar obrazu: {loaded_raw.shape}")
 
             # Przypisanie obrazu
             self.magic_img = loaded_img
@@ -18487,6 +20033,7 @@ class AstroApp(QMainWindow):
         params = dialog.get_parameters()
         self.starnet_stride = params["stride"]
         self.starnet_generate_starmask = bool(params.get("generate_starmask", False))
+        self.starnet_prestretch_linear = bool(params.get("prestretch_linear", False))
         save_config(
             self.denoise_model_path,
             self.bg_removal_model_path,
@@ -18504,12 +20051,21 @@ class AstroApp(QMainWindow):
         self.starnet_source_img = self.magic_img.copy()
 
         self.progress_dialog = MagicProgressDialog(self)
+        self.progress_dialog.set_close_locked(True)
+        self._starnet_progress_dialog = self.progress_dialog
         self.progress_dialog.show()
         self.progress_dialog.update_progress("Starting StarNet++...", 0, 0)
 
-        self.starnet_worker = StarNetWorker(self.magic_img.copy(), self.starnet_path, self.starnet_stride)
+        self.starnet_worker = StarNetWorker(
+            self.magic_img.copy(),
+            self.starnet_path,
+            self.starnet_stride,
+            prestretch_linear=bool(getattr(self, "starnet_prestretch_linear", False)),
+        )
         self.starnet_worker.progress_signal.connect(self.progress_dialog.update_progress)
-        self.starnet_worker.finished_signal.connect(self.on_starnet_finished)
+        self.starnet_worker.finished_signal.connect(
+            lambda result, error_message, progress_dialog=self.progress_dialog: self.on_starnet_finished(result, error_message, progress_dialog)
+        )
         self.starnet_worker.start()
 
     def run_3d_fly_filter(self):
@@ -18545,6 +20101,7 @@ class AstroApp(QMainWindow):
             payload,
             starnet_path=self.starnet_path,
             starnet_stride=self.starnet_stride,
+            starnet_prestretch_linear=bool(getattr(self, "starnet_prestretch_linear", False)),
         )
         self.fly3d_worker.progress_signal.connect(self.progress_dialog.update_progress)
         self.fly3d_worker.finished_signal.connect(self.on_3d_fly_finished)
@@ -19711,15 +21268,36 @@ class AstroApp(QMainWindow):
         self.update_menu_actions()
         self.log("Magic Filter finished.")
 
-    def on_starnet_finished(self, result, error_message):
-        if hasattr(self, "progress_dialog") and self.progress_dialog is not None:
-            self.progress_dialog.close()
+    def on_starnet_finished(self, result, error_message, progress_dialog=None):
+        dialog_to_close = progress_dialog
+        if dialog_to_close is None:
+            dialog_to_close = getattr(self, "_starnet_progress_dialog", None)
+        if dialog_to_close is None and hasattr(self, "progress_dialog"):
+            dialog_to_close = self.progress_dialog
         if error_message:
+            if dialog_to_close is not None:
+                if hasattr(dialog_to_close, "set_close_locked"):
+                    dialog_to_close.set_close_locked(False)
+                dialog_to_close.setWindowTitle("StarNet++ failed")
+                dialog_to_close.update_progress("StarNet++ failed", 100, 100)
+                dialog_to_close.label_current.setText("Check logs for details.")
             self.log(error_message, "error")
             return
         if result is None:
+            if dialog_to_close is not None:
+                if hasattr(dialog_to_close, "set_close_locked"):
+                    dialog_to_close.set_close_locked(False)
+                dialog_to_close.setWindowTitle("StarNet++ failed")
+                dialog_to_close.update_progress("StarNet++ failed", 100, 100)
+                dialog_to_close.label_current.setText("Empty output image.")
             self.log("StarNet++ failed: empty result.", "error")
             return
+        if dialog_to_close is not None:
+            if hasattr(dialog_to_close, "force_close"):
+                dialog_to_close.force_close()
+            else:
+                dialog_to_close.close()
+        self._starnet_progress_dialog = None
         source_before_starnet = None
         if hasattr(self, "starnet_source_img") and self.starnet_source_img is not None:
             source_before_starnet = self.starnet_source_img.copy()
@@ -20153,7 +21731,9 @@ class AstroApp(QMainWindow):
             "action_starnet",
             "action_3d_fly",
             "action_color_calibration",
+            "action_star_correction",
             "action_blur",
+            "action_local_contrast",
             "action_rotate",
             "action_crop",
             "action_paste_layer",
@@ -20261,9 +21841,23 @@ class ClickableThumbnailWidget(QWidget):
 def main():
     if sys.platform.startswith("linux"):
         QApplication.setAttribute(Qt.AA_UseSoftwareOpenGL, True)
+        try:
+            QApplication.setDesktopFileName("astro-ai-plus")
+        except Exception:
+            pass
     app = QApplication(sys.argv)
+    ensure_linux_desktop_entry()
+    app.setApplicationName("Astro Ai Plus")
+    app.setApplicationDisplayName("Astro Ai Plus")
+    app_icon_path = get_app_icon_path()
+    if app_icon_path:
+        app_icon = QIcon(app_icon_path)
+        if not app_icon.isNull():
+            app.setWindowIcon(app_icon)
     apply_theme_application(app, "Fusion Dark")
     window = AstroApp()
+    if not app.windowIcon().isNull():
+        window.setWindowIcon(app.windowIcon())
     window.show()
     sys.exit(app.exec_())
 
