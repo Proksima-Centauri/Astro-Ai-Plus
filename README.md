@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/icons/top bar/ai.svg" alt="Astro Ai Plus icon" width="120" />
+  <img src="assets/favicon.ico" alt="Astro Ai Plus icon" width="120" />
 </p>
 
 # Astro Ai Plus
