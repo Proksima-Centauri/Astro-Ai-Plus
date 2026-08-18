@@ -352,6 +352,78 @@
       font-size: 0.95rem;
     }
 
+    .roadmap {
+      padding: 22px;
+      margin-bottom: 24px;
+      animation: rise 1.02s ease both;
+    }
+
+    .roadmap h3 {
+      margin: 0 0 6px;
+      font-size: 1.05rem;
+    }
+
+    .roadmap p {
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 0.94rem;
+    }
+
+    .timeline {
+      position: relative;
+      display: grid;
+      gap: 16px;
+      padding-left: 26px;
+    }
+
+    .timeline::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 8px;
+      width: 2px;
+      background: linear-gradient(180deg, var(--accent-1), var(--accent-2));
+      opacity: 0.9;
+    }
+
+    .timeline-item {
+      position: relative;
+      padding: 0 0 0 10px;
+    }
+
+    .timeline-item::before {
+      content: "";
+      position: absolute;
+      left: -24px;
+      top: 4px;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--accent-1);
+      box-shadow: 0 0 0 3px rgba(64, 214, 180, 0.25);
+    }
+
+    .timeline-date {
+      display: inline-block;
+      font-size: 0.76rem;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      color: var(--accent-1);
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .timeline-item h4 {
+      margin: 0 0 4px;
+      font-size: 1rem;
+    }
+
+    .timeline-item p {
+      margin: 0;
+      font-size: 0.92rem;
+    }
+
     .download {
       padding: 24px;
       display: flex;
@@ -484,6 +556,23 @@
         <h3>Formaty i warstwy</h3>
         <p>Obsluga <code>.fits</code>, <code>.tiff</code>, <code>.png</code>, undo/redo, warstwy i historia krokow.</p>
       </article>
+    </section>
+
+    <section class="roadmap card">
+      <h3>Roadmapa rozwoju</h3>
+      <p>Graficzna os czasu projektu (z gory na dol). Na ten moment zawiera 1 punkt.</p>
+      <div class="timeline" aria-label="Roadmapa Astro Ai Plus">
+        <article class="timeline-item">
+          <span class="timeline-date">2026-08-18</span>
+          <h4>Nowa strona produktu</h4>
+          <p>Uruchomienie strony z filmem intro, porownaniem AI i przyciskami pobierania.</p>
+        </article>
+        <article class="timeline-item">
+          <span class="timeline-date">Wkrotce</span>
+          <h4>Kolejny etap rozwoju</h4>
+          <p>Miejsce na nastepny kamien milowy projektu Astro Ai Plus.</p>
+        </article>
+      </div>
     </section>
 
     <section class="compare-grid">
