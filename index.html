@@ -434,6 +434,10 @@
     }
 
     .fly-preview {
+      position: relative;
+      left: 50%;
+      width: min(90vw, 1420px);
+      transform: translateX(-50%);
       padding: 18px;
       margin-bottom: 24px;
       animation: rise 1.05s ease both;
@@ -527,6 +531,12 @@
       }
 
       .compare-stage {
+        left: 0;
+        width: 100%;
+        transform: none;
+      }
+
+      .fly-preview {
         left: 0;
         width: 100%;
         transform: none;
