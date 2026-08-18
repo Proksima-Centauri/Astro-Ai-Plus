@@ -208,11 +208,8 @@
     }
 
     .compare-stage {
-      position: relative;
-      left: 50%;
       width: min(90vw, 1420px);
-      transform: translateX(-50%);
-      margin-bottom: 24px;
+      margin: 0 auto 24px;
     }
 
     .compare {
@@ -434,12 +431,9 @@
     }
 
     .fly-preview {
-      position: relative;
-      left: 50%;
       width: min(90vw, 1420px);
-      transform: translateX(-50%);
+      margin: 0 auto 24px;
       padding: 18px;
-      margin-bottom: 24px;
       animation: rise 1.05s ease both;
     }
 
@@ -456,10 +450,27 @@
 
     .fly-preview video {
       width: 100%;
+      height: 100%;
       display: block;
+      object-fit: cover;
+      border: 0;
+      background: #03040a;
+    }
+
+    .fly-video-box {
+      position: relative;
+      aspect-ratio: 16 / 9;
+      overflow: hidden;
       border-radius: 14px;
       border: 1px solid rgba(255, 255, 255, 0.18);
       background: #03040a;
+    }
+
+    .fly-video-box video {
+      width: 100%;
+      display: block;
+      height: 100%;
+      object-fit: cover;
     }
 
     .download h2 {
@@ -531,15 +542,11 @@
       }
 
       .compare-stage {
-        left: 0;
         width: 100%;
-        transform: none;
       }
 
       .fly-preview {
-        left: 0;
         width: 100%;
-        transform: none;
       }
 
       .download {
@@ -650,10 +657,12 @@
     <section class="fly-preview card">
       <h3>Podglad efektu 3D FLY</h3>
       <p>Zobacz, jak wyglada finalna animacja wygenerowana narzedziem 3D FLY.</p>
-      <video controls preload="metadata" playsinline>
-        <source src="assets/3d_fly.mp4" type="video/mp4">
-        Twoja przegladarka nie obsluguje odtwarzania wideo.
-      </video>
+      <div class="fly-video-box">
+        <video controls preload="metadata" playsinline>
+          <source src="assets/3d_fly.mp4" type="video/mp4">
+          Twoja przegladarka nie obsluguje odtwarzania wideo.
+        </video>
+      </div>
     </section>
 
     <section class="download card">
