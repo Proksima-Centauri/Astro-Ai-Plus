@@ -89,6 +89,33 @@
       background: #03040a;
     }
 
+    .scroll-hint {
+      position: fixed;
+      left: 50%;
+      bottom: 20px;
+      transform: translateX(-50%) translateY(12px);
+      padding: 8px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      background: rgba(6, 10, 20, 0.66);
+      color: #f2f6ff;
+      letter-spacing: 0.18em;
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease, transform 0.25s ease;
+      backdrop-filter: blur(6px);
+      z-index: 20;
+    }
+
+    .scroll-hint.is-visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+      animation: hint-bob 1.6s ease-in-out infinite;
+    }
+
     .card {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -379,6 +406,16 @@
       }
     }
 
+    @keyframes hint-bob {
+      0%,
+      100% {
+        transform: translateX(-50%) translateY(0);
+      }
+      50% {
+        transform: translateX(-50%) translateY(5px);
+      }
+    }
+
     @media (max-width: 920px) {
       .hero {
         grid-template-columns: 1fr;
@@ -424,7 +461,7 @@
           plate solving, StarNet++, deepSNR, mozaika oraz animacje 3D FLY.
         </p>
         <div class="actions">
-          <a class="btn" href="https://drive.google.com/drive/folders/1crbImHNfcbhDy9qUWKCynpFeBC4eXYH3?usp=sharing" target="_blank" rel="noopener noreferrer">Pobierz wersje Linux</a>
+          <a class="btn" href="https://drive.google.com/file/d/1kQIBxSWHUmUXAVNI-UZbxsIL72CGZc1D/view?usp=drive_link" target="_blank" rel="noopener noreferrer">Pobierz wersje Linux</a>
           <a class="btn secondary" href="README.pl.md">Czytaj dokumentacje</a>
         </div>
       </div>
@@ -489,13 +526,15 @@
         <h2>Gotowe do pobrania i uruchomienia</h2>
         <p>Pobierasz gotowa wersje Linux z Google Drive (folder z aplikacja i <code>_internal</code>).</p>
       </div>
-      <a class="btn" href="https://drive.google.com/drive/folders/1crbImHNfcbhDy9qUWKCynpFeBC4eXYH3?usp=sharing" target="_blank" rel="noopener noreferrer">Pobierz teraz</a>
+      <a class="btn" href="https://drive.google.com/file/d/1kQIBxSWHUmUXAVNI-UZbxsIL72CGZc1D/view?usp=drive_link" target="_blank" rel="noopener noreferrer">Pobierz teraz</a>
     </section>
 
     <footer>
       <span id="year"></span> Astro Ai Plus
     </footer>
   </main>
+
+  <div id="scrollHint" class="scroll-hint" aria-hidden="true">SCROLL DOWN</div>
 
   <script>
     document.getElementById("year").textContent = new Date().getFullYear();
@@ -515,6 +554,31 @@
       slider.addEventListener("input", update);
       update();
     });
+
+    const introVideo = document.querySelector(".intro video");
+    const scrollHint = document.getElementById("scrollHint");
+
+    if (introVideo && scrollHint) {
+      let hasScrolledOnce = window.scrollY > 0;
+
+      const updateScrollHint = () => {
+        const isPlaying = !introVideo.paused && !introVideo.ended;
+        scrollHint.classList.toggle("is-visible", isPlaying && !hasScrolledOnce);
+      };
+
+      ["play", "pause", "ended", "loadedmetadata", "canplay"].forEach((eventName) => {
+        introVideo.addEventListener(eventName, updateScrollHint);
+      });
+
+      window.addEventListener("scroll", () => {
+        if (window.scrollY > 0) {
+          hasScrolledOnce = true;
+        }
+
+        updateScrollHint();
+      }, { passive: true });
+      updateScrollHint();
+    }
   </script>
 </body>
 </html>
