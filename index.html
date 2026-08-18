@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Astro Ai Plus - pobierz aplikacje</title>
+  <meta name="description" content="Astro Ai Plus - desktopowa aplikacja do obrobki astrofotografii. Pobierz gotowa wersje i zacznij obrabiac zdjecia kosmosu.">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
+    :root {
+      --bg-night: #080912;
+      --bg-deep: #101729;
+      --panel: rgba(16, 23, 41, 0.72);
+      --text: #edf2ff;
+      --muted: #b9c3da;
+      --line: rgba(173, 194, 255, 0.25);
+      --accent-1: #40d6b4;
+      --accent-2: #3ba7ff;
+      --accent-3: #ff9f5a;
+      --shadow: 0 20px 45px rgba(0, 0, 0, 0.45);
+      --radius: 20px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Space Grotesk", "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 20% -10%, rgba(59, 167, 255, 0.25), transparent 30%),
+        radial-gradient(circle at 90% 0%, rgba(255, 159, 90, 0.2), transparent 28%),
+        radial-gradient(circle at 50% 120%, rgba(64, 214, 180, 0.2), transparent 32%),
+        linear-gradient(145deg, var(--bg-night), var(--bg-deep));
+      min-height: 100vh;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    .stars {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.35;
+      background-image:
+        radial-gradient(circle at 22% 17%, #ffffff 0 1px, transparent 1px),
+        radial-gradient(circle at 81% 31%, #ffffff 0 1px, transparent 1px),
+        radial-gradient(circle at 42% 72%, #ffffff 0 1px, transparent 1px),
+        radial-gradient(circle at 67% 61%, #ffffff 0 1px, transparent 1px),
+        radial-gradient(circle at 13% 83%, #ffffff 0 1px, transparent 1px);
+      background-size: 320px 320px;
+      animation: drift 40s linear infinite;
+    }
+
+    .wrap {
+      width: min(1080px, 92vw);
+      margin: 0 auto;
+      padding: 30px 0 60px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.15fr 1fr;
+      gap: 30px;
+      align-items: center;
+      margin-bottom: 34px;
+    }
+
+    .intro {
+      max-width: 860px;
+      margin: -14px auto 30px;
+      padding: 10px;
+      animation: rise 0.7s ease both;
+    }
+
+    .intro video {
+      width: 100%;
+      display: block;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background: #03040a;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+    }
+
+    .hero-copy {
+      padding: 36px;
+      animation: rise 0.85s ease both;
+    }
+
+    .eyebrow {
+      font-size: 0.8rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent-1);
+      margin-bottom: 10px;
+      font-weight: 700;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      line-height: 1.06;
+      font-size: clamp(2rem, 4.6vw, 3.6rem);
+      letter-spacing: -0.03em;
+    }
+
+    .lead {
+      margin: 0 0 24px;
+      color: var(--muted);
+      max-width: 58ch;
+    }
+
+    .actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 18px;
+      text-decoration: none;
+      color: #061022;
+      background: linear-gradient(135deg, var(--accent-1), #83f1da);
+      font-weight: 700;
+      font-size: 0.95rem;
+      transition: transform 0.2s ease, box-shadow 0.25s ease;
+      box-shadow: 0 12px 22px rgba(64, 214, 180, 0.35);
+    }
+
+    .btn.secondary {
+      color: var(--text);
+      background: rgba(173, 194, 255, 0.1);
+      border: 1px solid var(--line);
+      box-shadow: none;
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+    }
+
+    .preview {
+      padding: 14px;
+      animation: rise 1s ease both;
+    }
+
+    .preview img {
+      width: 100%;
+      border-radius: 14px;
+      display: block;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+
+    .compare-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+
+    .compare-stage {
+      position: relative;
+      left: 50%;
+      width: min(90vw, 1420px);
+      transform: translateX(-50%);
+      margin-bottom: 24px;
+    }
+
+    .compare {
+      padding: 16px;
+      animation: rise 1.05s ease both;
+    }
+
+    .compare h3 {
+      margin: 0 0 4px;
+      font-size: 1.05rem;
+    }
+
+    .compare p {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .compare-box {
+      position: relative;
+      aspect-ratio: 16 / 9;
+      border-radius: 14px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background: #04070f;
+      isolation: isolate;
+    }
+
+    .compare-layer {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .compare-after-wrap {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      overflow: hidden;
+      clip-path: inset(0 50% 0 0);
+    }
+
+    .compare-divider {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 50%;
+      width: 2px;
+      background: rgba(255, 255, 255, 0.92);
+      box-shadow: 0 0 0 1px rgba(59, 167, 255, 0.45);
+      pointer-events: none;
+      z-index: 4;
+    }
+
+    .compare-tag {
+      position: absolute;
+      top: 10px;
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 700;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      background: rgba(6, 10, 20, 0.52);
+      z-index: 5;
+    }
+
+    .compare-tag.before {
+      left: 10px;
+    }
+
+    .compare-tag.after {
+      right: 10px;
+    }
+
+    .compare-slider {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: 12px;
+      z-index: 6;
+      -webkit-appearance: none;
+      appearance: none;
+      background: transparent;
+      margin: 0;
+    }
+
+    .compare-slider::-webkit-slider-runnable-track {
+      height: 4px;
+      background: rgba(255, 255, 255, 0.5);
+      border-radius: 999px;
+    }
+
+    .compare-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #ffffff;
+      border: 2px solid var(--accent-2);
+      margin-top: -6px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+    }
+
+    .compare-slider::-moz-range-track {
+      height: 4px;
+      background: rgba(255, 255, 255, 0.5);
+      border-radius: 999px;
+    }
+
+    .compare-slider::-moz-range-thumb {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #ffffff;
+      border: 2px solid var(--accent-2);
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+    }
+
+    .feature {
+      padding: 18px;
+      animation: rise 1s ease both;
+    }
+
+    .feature h3 {
+      margin: 0 0 6px;
+      font-size: 1.05rem;
+    }
+
+    .feature p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .download {
+      padding: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 18px;
+      animation: rise 1.05s ease both;
+    }
+
+    .download h2 {
+      margin: 0;
+      font-size: clamp(1.3rem, 2.4vw, 2rem);
+      letter-spacing: -0.02em;
+    }
+
+    .download p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    code {
+      font-family: "JetBrains Mono", monospace;
+      color: var(--accent-3);
+      font-size: 0.9em;
+    }
+
+    footer {
+      margin-top: 24px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    @keyframes rise {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes drift {
+      from {
+        transform: translateY(0);
+      }
+      to {
+        transform: translateY(-35px);
+      }
+    }
+
+    @media (max-width: 920px) {
+      .hero {
+        grid-template-columns: 1fr;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .compare-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .compare-stage {
+        left: 0;
+        width: 100%;
+        transform: none;
+      }
+
+      .download {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="stars" aria-hidden="true"></div>
+  <main class="wrap">
+    <section class="intro card">
+      <video autoplay muted playsinline controls preload="metadata">
+        <source src="intro.mp4" type="video/mp4">
+        Twoja przegladarka nie obsluguje odtwarzania wideo.
+      </video>
+    </section>
+
+    <section class="hero">
+      <div class="hero-copy card">
+        <div class="eyebrow">Astrofotografia Desktop</div>
+        <h1>Obrabiaj zdjecia kosmosu szybciej i precyzyjniej</h1>
+        <p class="lead">
+          Astro Ai Plus laczy klasyczne narzedzia edycji z funkcjami astro: analiza FWHM/SNR,
+          plate solving, StarNet++, deepSNR, mozaika oraz animacje 3D FLY.
+        </p>
+        <div class="actions">
+          <a class="btn" href="dist/Astro%20Ai%20Plus/Astro%20Ai%20Plus" download>Pobierz aplikacje</a>
+          <a class="btn secondary" href="README.pl.md">Czytaj dokumentacje</a>
+        </div>
+      </div>
+
+      <div class="preview card">
+        <img src="assets/altair/init.png" alt="Podglad interfejsu Astro Ai Plus">
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="feature card">
+        <h3>Workflow od razu po starcie</h3>
+        <p>Wczytaj obraz, popraw tonalnosc, uruchom analize i zapisz wynik bez opuszczania aplikacji.</p>
+      </article>
+      <article class="feature card">
+        <h3>Narzedzia astro i AI</h3>
+        <p>Integracja z Astrometry.net, StarNet++, deepSNR i asystentem Altair (Gemini).</p>
+      </article>
+      <article class="feature card">
+        <h3>Formaty i warstwy</h3>
+        <p>Obsluga <code>.fits</code>, <code>.tiff</code>, <code>.png</code>, undo/redo, warstwy i historia krokow.</p>
+      </article>
+    </section>
+
+    <section class="compare-grid">
+      <article class="compare card">
+        <h3>Porownanie AI - deepSNR</h3>
+        <p>Przesun suwak, aby porownac obraz przed i po odszumianiu AI.</p>
+        <div class="compare-box" data-compare>
+          <img class="compare-layer" src="assets/compare/deepsnr_before.png" alt="Porownanie deepSNR przed obrobka">
+          <div class="compare-after-wrap">
+            <img class="compare-layer" src="assets/compare/deepsnr_after.png" alt="Porownanie deepSNR po obrobce AI">
+          </div>
+          <div class="compare-divider" aria-hidden="true"></div>
+          <span class="compare-tag before">Przed</span>
+          <span class="compare-tag after">Po AI</span>
+          <input class="compare-slider" type="range" min="0" max="100" value="50" aria-label="Suwak porownania deepSNR">
+        </div>
+      </article>
+
+    </section>
+
+    <section class="compare-stage">
+      <article class="compare card">
+        <h3>Porownanie AI - Star Shrink</h3>
+        <p>Sprawdz, jak funkcja Star Shrink zmniejsza gwiazdy i poprawia czytelnosc obiektu.</p>
+        <div class="compare-box" data-compare>
+          <img class="compare-layer" src="assets/website/star-shrink/veli.png" alt="Porownanie przed funkcja Star Shrink">
+          <div class="compare-after-wrap">
+            <img class="compare-layer" src="assets/website/star-shrink/veli_shrinked.png" alt="Porownanie po funkcji Star Shrink">
+          </div>
+          <div class="compare-divider" aria-hidden="true"></div>
+          <span class="compare-tag before">Przed</span>
+          <span class="compare-tag after">Po AI</span>
+          <input class="compare-slider" type="range" min="0" max="100" value="50" aria-label="Suwak porownania Star Shrink">
+        </div>
+      </article>
+    </section>
+
+    <section class="download card">
+      <div>
+        <h2>Gotowe do pobrania i uruchomienia</h2>
+        <p>Wersja binarna jest dostepna lokalnie w katalogu <code>dist/Astro Ai Plus</code>.</p>
+      </div>
+      <a class="btn" href="dist/Astro%20Ai%20Plus/Astro%20Ai%20Plus" download>Pobierz teraz</a>
+    </section>
+
+    <footer>
+      <span id="year"></span> Astro Ai Plus
+    </footer>
+  </main>
+
+  <script>
+    document.getElementById("year").textContent = new Date().getFullYear();
+
+    document.querySelectorAll("[data-compare]").forEach((box) => {
+      const slider = box.querySelector(".compare-slider");
+      const after = box.querySelector(".compare-after-wrap");
+      const divider = box.querySelector(".compare-divider");
+
+      const update = () => {
+        const value = slider.value;
+        const percent = value + "%";
+        after.style.clipPath = `inset(0 ${100 - value}% 0 0)`;
+        divider.style.left = percent;
+      };
+
+      slider.addEventListener("input", update);
+      update();
+    });
+  </script>
+</body>
+</html>
