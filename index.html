@@ -433,6 +433,31 @@
       animation: rise 1.05s ease both;
     }
 
+    .fly-preview {
+      padding: 18px;
+      margin-bottom: 24px;
+      animation: rise 1.05s ease both;
+    }
+
+    .fly-preview h3 {
+      margin: 0 0 6px;
+      font-size: 1.2rem;
+    }
+
+    .fly-preview p {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .fly-preview video {
+      width: 100%;
+      display: block;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background: #03040a;
+    }
+
     .download h2 {
       margin: 0;
       font-size: clamp(1.3rem, 2.4vw, 2rem);
@@ -610,6 +635,15 @@
           </article>
         </div>
       </article>
+    </section>
+
+    <section class="fly-preview card">
+      <h3>Podglad efektu 3D FLY</h3>
+      <p>Zobacz, jak wyglada finalna animacja wygenerowana narzedziem 3D FLY.</p>
+      <video controls preload="metadata" playsinline>
+        <source src="assets/3d_fly.mp4" type="video/mp4">
+        Twoja przegladarka nie obsluguje odtwarzania wideo.
+      </video>
     </section>
 
     <section class="download card">
