@@ -510,19 +510,57 @@
       gap: 12px;
     }
 
-    .faq-list li {
-      padding: 12px 14px;
+    .faq-item {
       border: 1px solid rgba(255, 255, 255, 0.14);
       border-radius: 12px;
       background: rgba(7, 12, 24, 0.42);
+      overflow: hidden;
     }
 
-    .faq-list h4 {
-      margin: 0 0 4px;
+    .faq-item summary {
+      list-style: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 14px;
+      font-weight: 700;
       font-size: 0.98rem;
     }
 
-    .faq-list p {
+    .faq-item summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .faq-toggle {
+      width: 28px;
+      height: 28px;
+      flex-shrink: 0;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255, 255, 255, 0.26);
+      background: rgba(255, 255, 255, 0.06);
+      color: #ffffff;
+      font-size: 1.25rem;
+      line-height: 1;
+      transition: transform 0.2s ease, background 0.2s ease;
+    }
+
+    .faq-item[open] .faq-toggle {
+      transform: rotate(45deg);
+      background: rgba(64, 214, 180, 0.2);
+      border-color: rgba(64, 214, 180, 0.55);
+    }
+
+    .faq-answer {
+      padding: 0 14px 14px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .faq-answer p {
+      padding-top: 10px;
       margin: 0;
       color: var(--muted);
       font-size: 0.92rem;
@@ -751,16 +789,114 @@
       <h3>FAQ</h3>
       <ul class="faq-list" aria-label="Najczesciej zadawane pytania">
         <li>
-          <h4>Czy aplikacja dziala offline?</h4>
-          <p>Tak. Wiekszosc narzedzi dziala lokalnie, a internet jest potrzebny tylko dla funkcji online (np. Astrometry.net i aktualizacje).</p>
+          <details class="faq-item">
+            <summary>
+              <span>Czy ten program uruchomie na kompatybilnym komputerze?</span>
+              <span class="faq-toggle" aria-hidden="true">+</span>
+            </summary>
+            <div class="faq-answer">
+              <p>Tak, jesli masz komputer z Linuxem x64, minimum 8 GB RAM i procesor klasy Intel i5 / Ryzen 5. Dla AI i duzych plikow rekomendowane jest 16 GB RAM lub wiecej.</p>
+            </div>
+          </details>
         </li>
         <li>
-          <h4>Jak wyglada aktualizacja do nowej wersji?</h4>
-          <p>Sprawdzanie wersji odbywa sie przez update API. Po wykryciu nowego wydania pobierasz paczke i podmieniasz folder aplikacji.</p>
+          <details class="faq-item">
+            <summary>
+              <span>Czy aplikacja dziala offline?</span>
+              <span class="faq-toggle" aria-hidden="true">+</span>
+            </summary>
+            <div class="faq-answer">
+              <p>Tak. Wiekszosc narzedzi dziala lokalnie, a internet jest potrzebny tylko dla funkcji online, takich jak Astrometry.net i sprawdzanie aktualizacji.</p>
+            </div>
+          </details>
         </li>
         <li>
-          <h4>Jakie formaty obrazow obsluguje Astro Ai Plus?</h4>
-          <p>Program wspiera miedzy innymi <code>.fits</code>, <code>.tiff</code> i <code>.png</code>, wraz z historia operacji undo/redo.</p>
+          <details class="faq-item">
+            <summary>
+              <span>Jakie formaty obrazow obsluguje Astro Ai Plus?</span>
+              <span class="faq-toggle" aria-hidden="true">+</span>
+            </summary>
+            <div class="faq-answer">
+              <p>Program wspiera miedzy innymi <code>.fits</code>, <code>.tiff</code> i <code>.png</code>, wraz z historia operacji undo/redo.</p>
+            </div>
+          </details>
+        </li>
+        <li>
+          <details class="faq-item">
+            <summary>
+              <span>Czy moge porownac efekt przed i po AI?</span>
+              <span class="faq-toggle" aria-hidden="true">+</span>
+            </summary>
+            <div class="faq-answer">
+              <p>Tak. Na stronie i w aplikacji dostepne sa porownania Before/After, dzieki ktorym latwo oceniasz efekt odszumiania i innych narzedzi AI.</p>
+            </div>
+          </details>
+        </li>
+        <li>
+          <details class="faq-item">
+            <summary>
+              <span>Czy potrzebuje GPU, zeby korzystac z AI?</span>
+              <span class="faq-toggle" aria-hidden="true">+</span>
+            </summary>
+            <div class="faq-answer">
+              <p>Nie jest to wymagane, ale karta graficzna mocno przyspiesza niektore operacje. Na samym CPU aplikacja tez dziala, tylko wolniej.</p>
+            </div>
+          </details>
+        </li>
+        <li>
+          <details class="faq-item">
+            <summary>
+              <span>Jak wyglada aktualizacja do nowej wersji?</span>
+              <span class="faq-toggle" aria-hidden="true">+</span>
+            </summary>
+            <div class="faq-answer">
+              <p>Sprawdzanie wersji odbywa sie przez update API. Po wykryciu nowego wydania pobierasz paczke i podmieniasz folder aplikacji.</p>
+            </div>
+          </details>
+        </li>
+        <li>
+          <details class="faq-item">
+            <summary>
+              <span>Czy moge cofac i ponawiac operacje?</span>
+              <span class="faq-toggle" aria-hidden="true">+</span>
+            </summary>
+            <div class="faq-answer">
+              <p>Tak, aplikacja wspiera historie edycji z undo/redo, co pozwala bezpiecznie testowac rozne ustawienia obrobki.</p>
+            </div>
+          </details>
+        </li>
+        <li>
+          <details class="faq-item">
+            <summary>
+              <span>Czy aplikacja obsluguje plate solving?</span>
+              <span class="faq-toggle" aria-hidden="true">+</span>
+            </summary>
+            <div class="faq-answer">
+              <p>Tak, Astro Ai Plus integruje sie z Astrometry.net i pozwala wykonac plate solving bez recznego przepisywania danych.</p>
+            </div>
+          </details>
+        </li>
+        <li>
+          <details class="faq-item">
+            <summary>
+              <span>Gdzie znajde dokumentacje i instrukcje?</span>
+              <span class="faq-toggle" aria-hidden="true">+</span>
+            </summary>
+            <div class="faq-answer">
+              <p>Dokumentacje znajdziesz w plikach README oraz pod przyciskiem „Czytaj dokumentacje” na stronie startowej.</p>
+            </div>
+          </details>
+        </li>
+        <li>
+          <details class="faq-item">
+            <summary>
+              <span>Czy moge tworzyc animacje 3D FLY z gotowego obrazu?</span>
+              <span class="faq-toggle" aria-hidden="true">+</span>
+            </summary>
+            <div class="faq-answer">
+              <p>Tak. Funkcja 3D FLY pozwala wygenerowac finalna animacje na podstawie przygotowanego obrazu i zapisac wynik do pliku wideo.</p>
+            </div>
+          </details>
         </li>
       </ul>
     </section>
