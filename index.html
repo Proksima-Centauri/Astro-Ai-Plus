@@ -808,7 +808,7 @@
       </article>
       <article class="feature card">
         <h3 id="txtFeature2Title">Narzedzia astro i AI</h3>
-        <p id="txtFeature2Body">Integracja z Astrometry.net, StarNet++, deepSNR i asystentem Altair (Gemini).</p>
+        <p id="txtFeature2Body">Integracja z Astrometry.net, StarNet++, deepSNR i asystentem Altair (offline, GGUF).</p>
       </article>
       <article class="feature card">
         <h3 id="txtFeature3Title">Formaty i warstwy</h3>
@@ -816,14 +816,14 @@
       </article>
     </section>
 
-    <section class="compare-grid">
+    <section class="compare-stage">
       <article class="compare card">
         <h3 id="txtCompare1Title">Porownanie AI - deepSNR</h3>
         <p id="txtCompare1Body">Przesun suwak, aby porownac obraz przed i po odszumianiu AI.</p>
         <div class="compare-box" data-compare>
-          <img class="compare-layer" src="assets/compare/deepsnr_before.png" alt="Porownanie deepSNR przed obrobka">
+          <img class="compare-layer" src="assets/website/deep-snr/veli.png" alt="Porownanie deepSNR przed obrobka">
           <div class="compare-after-wrap">
-            <img class="compare-layer" src="assets/compare/deepsnr_after.png" alt="Porownanie deepSNR po obrobce AI">
+            <img class="compare-layer" src="assets/website/deep-snr/veli_denoised.png" alt="Porownanie deepSNR po obrobce AI">
           </div>
           <div class="compare-divider" aria-hidden="true"></div>
           <span class="compare-tag before" data-before-tag>Przed</span>
@@ -887,16 +887,6 @@
         <p id="txtDownloadBody">Pobierasz gotowa wersje Linux z Google Drive (folder z aplikacja i <code>_internal</code>).</p>
       </div>
       <a class="btn" id="btnDownloadNow" href="https://drive.google.com/file/d/1kQIBxSWHUmUXAVNI-UZbxsIL72CGZc1D/view?usp=drive_link" target="_blank" rel="noopener noreferrer">Pobierz teraz</a>
-    </section>
-
-    <section class="update-api card">
-      <h3 id="txtUpdateApiTitle">System aktualizacji (API + GUI)</h3>
-      <p id="txtUpdateApiBody">Do projektu dolaczony jest prosty serwer update API oraz klient z GUI do publikacji i sprawdzania nowych wersji.</p>
-      <div class="actions">
-        <a class="btn secondary" href="https://raw.githubusercontent.com/Proksima-Centauri/Astro-Ai-Plus/main/update_api_server.py" target="_blank" rel="noopener noreferrer">update_api_server.py</a>
-        <a class="btn secondary" href="https://raw.githubusercontent.com/Proksima-Centauri/Astro-Ai-Plus/main/update_notifier.py" target="_blank" rel="noopener noreferrer">update_notifier.py</a>
-      </div>
-      <p class="api-note" id="txtUpdateApiNote">Przykladowe lokalne API: <code>http://127.0.0.1:8787</code></p>
     </section>
 
     <section class="faq card" id="faq">
@@ -1058,7 +1048,7 @@
         txtFeature1Title: "Workflow od razu po starcie",
         txtFeature1Body: "Wczytaj obraz, popraw tonalnosc, uruchom analize i zapisz wynik bez opuszczania aplikacji.",
         txtFeature2Title: "Narzedzia astro i AI",
-        txtFeature2Body: "Integracja z Astrometry.net, StarNet++, deepSNR i asystentem Altair (Gemini).",
+        txtFeature2Body: "Integracja z Astrometry.net, StarNet++, deepSNR i asystentem Altair (offline, GGUF).",
         txtFeature3Title: "Formaty i warstwy",
         txtFeature3Body: "Obsluga <code>.fits</code>, <code>.tiff</code>, <code>.png</code>, undo/redo, warstwy i historia krokow.",
         txtCompare1Title: "Porownanie AI - deepSNR",
@@ -1079,9 +1069,6 @@
         txtDownloadTitle: "Gotowe do pobrania i uruchomienia",
         txtDownloadBody: "Pobierasz gotowa wersje Linux z Google Drive (folder z aplikacja i <code>_internal</code>).",
         btnDownloadNow: "Pobierz teraz",
-        txtUpdateApiTitle: "System aktualizacji (API + GUI)",
-        txtUpdateApiBody: "Do projektu dolaczony jest prosty serwer update API oraz klient z GUI do publikacji i sprawdzania nowych wersji.",
-        txtUpdateApiNote: "Przykladowe lokalne API: <code>http://127.0.0.1:8787</code>",
         txtFaqTitle: "FAQ",
         txtFaqQ1: "Czy ten program uruchomie na kompatybilnym komputerze?",
         txtFaqA1: "Tak, jesli masz komputer z Linuxem x64, minimum 8 GB RAM i procesor klasy Intel i3 / Ryzen 3 lub nowszy. Dla AI i duzych plikow rekomendowane jest 16 GB RAM oraz mocniejszy CPU/GPU.",
@@ -1121,7 +1108,7 @@
         txtFeature1Title: "Workflow from the first launch",
         txtFeature1Body: "Load an image, correct tone, run analysis, and save results without leaving the app.",
         txtFeature2Title: "Astro and AI tools",
-        txtFeature2Body: "Integration with Astrometry.net, StarNet++, deepSNR, and Altair assistant (Gemini).",
+        txtFeature2Body: "Integration with Astrometry.net, StarNet++, deepSNR, and Altair assistant (offline, GGUF).",
         txtFeature3Title: "Formats and layers",
         txtFeature3Body: "Support for <code>.fits</code>, <code>.tiff</code>, <code>.png</code>, undo/redo, layers, and edit history.",
         txtCompare1Title: "AI comparison - deepSNR",
@@ -1142,9 +1129,6 @@
         txtDownloadTitle: "Ready to download and run",
         txtDownloadBody: "Download a ready Linux build from Google Drive (folder with app and <code>_internal</code>).",
         btnDownloadNow: "Download now",
-        txtUpdateApiTitle: "Update system (API + GUI)",
-        txtUpdateApiBody: "The project includes a simple update API server and a GUI client for publishing and checking new versions.",
-        txtUpdateApiNote: "Example local API: <code>http://127.0.0.1:8787</code>",
         txtFaqTitle: "FAQ",
         txtFaqQ1: "Can I run this app on a compatible computer?",
         txtFaqA1: "Yes, if you have Linux x64, at least 8 GB RAM, and an Intel i3 / Ryzen 3 class CPU or newer. For AI and large files, 16 GB RAM and a stronger CPU/GPU are recommended.",
@@ -1192,7 +1176,6 @@
       const htmlIds = new Set([
         "txtFeature3Body",
         "txtDownloadBody",
-        "txtUpdateApiNote",
         "txtFaqA3",
       ]);
       Object.keys(dict).forEach((key) => {
