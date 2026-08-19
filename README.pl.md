@@ -2,6 +2,8 @@
 
 Desktopowa aplikacja do obrobki astrofotografii napisana w Pythonie (PyQt5 + OpenCV + NumPy).
 
+Dostepne jezyki: [EN](README.en.md), [PL](README.pl.md), [DE](README.de.md), [ES](README.es.md), [FR](README.fr.md), [IT](README.it.md), [NL](README.nl.md), [PT](README.pt.md), [CS](README.cs.md), [TR](README.tr.md), [JA](README.ja.md), [RU](README.ru.md), [UK](README.uk.md).
+
 Projekt laczy klasyczne narzedzia (Levels, Curves, histogram, blur, crop, rotate) z funkcjami astro: analiza gwiazd (FWHM/SNR), plate solving, usuwanie gwiazd (StarNet++), denoise (deepSNR), mozaika klatek i filtr animacyjny 3D FLY.
 
 ## Najwazniejsze funkcje
@@ -16,14 +18,14 @@ Projekt laczy klasyczne narzedzia (Levels, Curves, histogram, blur, crop, rotate
   - deepSNR (zewnetrzny denoise),
   - mozaika kadrow,
   - 3D FLY (render klipu z warstw, opcjonalnie z audio).
-- Asystent AI Altair (Gemini) oraz sterowanie glosowe (opcjonalnie).
+- Asystent AI Altair w trybie 100% offline (`llama-cpp-python` + GGUF) oraz sterowanie glosowe (opcjonalnie).
 - Interfejs PL/EN, konfigurowalne preferencje i workspace.
 
 ## Wymagania
 
 - Python 3.10+ (najlepiej 3.11-3.13).
 - System Linux/Windows (na Linuxie aplikacja uruchamia software OpenGL).
-- Pakiety z `requirements.txt`: `numpy`, `opencv-python`, `sep`, `astropy`, `photutils`, `SpeechRecognition`, `onnxruntime`, `PyQt5`, `pyserial`.
+- Pakiety z `requirements.txt`: `numpy`, `opencv-python`, `largestinteriorrectangle`, `matplotlib`, `sep`, `astropy`, `photutils`, `SpeechRecognition`, `onnxruntime`, `PyQt5`, `pyserial`, `scikit-image`.
 
 Opcjonalne narzedzia zewnetrzne:
 
@@ -31,6 +33,7 @@ Opcjonalne narzedzia zewnetrzne:
 - StarNet++ (CLI) do usuwania gwiazd.
 - deepSNR (CLI).
 - `ffmpeg` do dolaczania audio do klipu 3D FLY.
+- Lokalny model GGUF dla asystenta Altair w `models/` (np. `qwen2.5-1.5b-instruct.Q4_K_M.gguf`).
 
 ## Instalacja
 
@@ -55,10 +58,10 @@ Przykladowe pola:
 - sciezki do narzedzi (`starnet_path`, `deepsnr_path`),
 - argumenty deepSNR (`deepsnr_args`),
 - plate solving (`api_key`, `pixel_size_um`, `focal_length_mm`),
-- ustawienia AI (`gemini_api_key`, `gemini_model`),
+- ustawienia AI (`local_ai_model_file`),
 - jezyk, motyw, liczba rdzeni, workspace.
 
-Uwaga bezpieczenstwa: plik konfiguracyjny moze zawierac klucze API. Nie publikuj go publicznie.
+Uwaga bezpieczenstwa: nie publikuj publicznie prywatnych sciezek i danych workspace.
 
 ## Szybki start workflow
 

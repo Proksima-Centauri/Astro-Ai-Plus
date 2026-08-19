@@ -6,6 +6,8 @@
 
 Desktop astrophotography processing application built with Python (PyQt5 + OpenCV + NumPy).
 
+Language versions: [EN](README.en.md), [PL](README.pl.md), [DE](README.de.md), [ES](README.es.md), [FR](README.fr.md), [IT](README.it.md), [NL](README.nl.md), [PT](README.pt.md), [CS](README.cs.md), [TR](README.tr.md), [JA](README.ja.md), [RU](README.ru.md), [UK](README.uk.md).
+
 The project combines classic editing tools (Levels, Curves, Histogram, Blur, Crop, Rotate) with astronomy-specific features: star analysis (FWHM/SNR), plate solving, star removal (StarNet++), denoise (deepSNR), frame mosaics, and the 3D FLY animation filter.
 
 ## Key features
@@ -20,14 +22,14 @@ The project combines classic editing tools (Levels, Curves, Histogram, Blur, Cro
   - deepSNR external denoise,
   - frame mosaic stitching,
   - 3D FLY clip rendering (optional audio).
-- Altair AI assistant (Gemini) and optional speech input.
+- Altair AI assistant in 100% offline mode (`llama-cpp-python` + GGUF) and optional speech input.
 - PL/EN UI with configurable preferences and workspaces.
 
 ## Requirements
 
 - Python 3.10+ (recommended 3.11-3.13).
 - Linux or Windows (on Linux the app enables software OpenGL).
-- Packages from `requirements.txt`: `numpy`, `opencv-python`, `sep`, `astropy`, `photutils`, `SpeechRecognition`, `onnxruntime`, `PyQt5`, `pyserial`.
+- Packages from `requirements.txt`: `numpy`, `opencv-python`, `largestinteriorrectangle`, `matplotlib`, `sep`, `astropy`, `photutils`, `SpeechRecognition`, `onnxruntime`, `PyQt5`, `pyserial`, `scikit-image`.
 
 Optional external tools:
 
@@ -35,6 +37,7 @@ Optional external tools:
 - StarNet++ CLI.
 - deepSNR CLI.
 - `ffmpeg` for attaching audio in 3D FLY output.
+- Local GGUF model for Altair assistant in `models/` (e.g. `qwen2.5-1.5b-instruct.Q4_K_M.gguf`).
 
 ## Installation
 
@@ -59,10 +62,10 @@ Example fields:
 - tool paths (`starnet_path`, `deepsnr_path`),
 - deepSNR args (`deepsnr_args`),
 - plate solving (`api_key`, `pixel_size_um`, `focal_length_mm`),
-- AI settings (`gemini_api_key`, `gemini_model`),
+- AI settings (`local_ai_model_file`),
 - language, theme, core count, workspace.
 
-Security note: config may contain API keys. Do not publish it in public repositories.
+Security note: keep private paths and local workspace data out of public repositories.
 
 ## Quick workflow
 
@@ -106,5 +109,5 @@ Common issues:
 - `Astro Ai Plus.py` - main app file.
 - `deep_sky_catalog.py` - offline deep-sky object catalog.
 - `3d_fly_help.md` - detailed 3D FLY manual.
-- `requirements.txt` - Python dependencies.c
+- `requirements.txt` - Python dependencies.
 - `assets/` - UI icons and resources.

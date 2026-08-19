@@ -1,0 +1,6 @@
+config
+astro_magic_config.json
+__pycache__/
+*.pyc
+build/
+dist/

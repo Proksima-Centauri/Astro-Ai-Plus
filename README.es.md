@@ -16,7 +16,7 @@ El proyecto combina herramientas clasicas (Levels, Curves, Histogram, Blur, Crop
   - deepSNR externo para denoise,
   - mosaico de cuadros,
   - render de clip 3D FLY (audio opcional).
-- Asistente AI Altair (Gemini) y entrada por voz opcional.
+- Asistente AI Altair en modo 100% offline (`llama-cpp-python` + GGUF) y entrada por voz opcional.
 - Interfaz PL/EN con preferencias y workspaces configurables.
 
 ## Requisitos
@@ -55,10 +55,10 @@ Campos de ejemplo:
 - rutas de herramientas (`starnet_path`, `deepsnr_path`),
 - argumentos deepSNR (`deepsnr_args`),
 - plate solving (`api_key`, `pixel_size_um`, `focal_length_mm`),
-- ajustes AI (`gemini_api_key`, `gemini_model`),
+- ajustes AI (`local_ai_model_file`),
 - idioma, tema, numero de nucleos, workspace.
 
-Nota de seguridad: el archivo puede contener claves API. No lo publiques en repositorios publicos.
+Nota de seguridad: no publiques rutas privadas ni datos de workspace en repositorios publicos.
 
 ## Flujo rapido
 
