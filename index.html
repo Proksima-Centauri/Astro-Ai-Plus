@@ -269,7 +269,7 @@
       inset: 0;
       width: 100%;
       overflow: hidden;
-      clip-path: inset(0 50% 0 0);
+      clip-path: inset(0 0 0 50%);
     }
 
     .compare-divider {
@@ -328,11 +328,11 @@
     }
 
     .compare-tag.before {
-      right: 10px;
+      left: 10px;
     }
 
     .compare-tag.after {
-      left: 10px;
+      right: 10px;
     }
 
     .compare-slider {
@@ -1228,7 +1228,7 @@
       const update = () => {
         const value = slider.value;
         const percent = value + "%";
-        after.style.clipPath = `inset(0 ${100 - value}% 0 0)`;
+        after.style.clipPath = `inset(0 0 0 ${value}%)`;
         divider.style.left = percent;
       };
 
