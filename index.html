@@ -491,6 +491,43 @@
       animation: rise 1.05s ease both;
     }
 
+    .faq {
+      padding: 20px;
+      margin-bottom: 24px;
+      animation: rise 1.08s ease both;
+    }
+
+    .faq h3 {
+      margin: 0 0 12px;
+      font-size: 1.2rem;
+    }
+
+    .faq-list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 12px;
+    }
+
+    .faq-list li {
+      padding: 12px 14px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 12px;
+      background: rgba(7, 12, 24, 0.42);
+    }
+
+    .faq-list h4 {
+      margin: 0 0 4px;
+      font-size: 0.98rem;
+    }
+
+    .faq-list p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
     .update-api h3 {
       margin: 0 0 6px;
       font-size: 1.2rem;
@@ -708,6 +745,24 @@
         <a class="btn secondary" href="https://raw.githubusercontent.com/Proksima-Centauri/Astro-Ai-Plus/main/update_notifier.py" target="_blank" rel="noopener noreferrer">update_notifier.py</a>
       </div>
       <p class="api-note">Przykladowe lokalne API: <code>http://127.0.0.1:8787</code></p>
+    </section>
+
+    <section class="faq card" id="faq">
+      <h3>FAQ</h3>
+      <ul class="faq-list" aria-label="Najczesciej zadawane pytania">
+        <li>
+          <h4>Czy aplikacja dziala offline?</h4>
+          <p>Tak. Wiekszosc narzedzi dziala lokalnie, a internet jest potrzebny tylko dla funkcji online (np. Astrometry.net i aktualizacje).</p>
+        </li>
+        <li>
+          <h4>Jak wyglada aktualizacja do nowej wersji?</h4>
+          <p>Sprawdzanie wersji odbywa sie przez update API. Po wykryciu nowego wydania pobierasz paczke i podmieniasz folder aplikacji.</p>
+        </li>
+        <li>
+          <h4>Jakie formaty obrazow obsluguje Astro Ai Plus?</h4>
+          <p>Program wspiera miedzy innymi <code>.fits</code>, <code>.tiff</code> i <code>.png</code>, wraz z historia operacji undo/redo.</p>
+        </li>
+      </ul>
     </section>
 
     <footer>
