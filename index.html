@@ -485,6 +485,33 @@
       font-size: 0.95rem;
     }
 
+    .update-api {
+      padding: 20px;
+      margin-bottom: 24px;
+      animation: rise 1.05s ease both;
+    }
+
+    .update-api h3 {
+      margin: 0 0 6px;
+      font-size: 1.2rem;
+    }
+
+    .update-api p {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .update-api .actions {
+      margin-bottom: 12px;
+    }
+
+    .api-note {
+      margin: 0;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
     code {
       font-family: "JetBrains Mono", monospace;
       color: var(--accent-3);
@@ -671,6 +698,16 @@
         <p>Pobierasz gotowa wersje Linux z Google Drive (folder z aplikacja i <code>_internal</code>).</p>
       </div>
       <a class="btn" href="https://drive.google.com/file/d/1kQIBxSWHUmUXAVNI-UZbxsIL72CGZc1D/view?usp=drive_link" target="_blank" rel="noopener noreferrer">Pobierz teraz</a>
+    </section>
+
+    <section class="update-api card">
+      <h3>System aktualizacji (API + GUI)</h3>
+      <p>Do projektu dolaczony jest prosty serwer update API oraz klient z GUI do publikacji i sprawdzania nowych wersji.</p>
+      <div class="actions">
+        <a class="btn secondary" href="https://raw.githubusercontent.com/Proksima-Centauri/Astro-Ai-Plus/main/update_api_server.py" target="_blank" rel="noopener noreferrer">update_api_server.py</a>
+        <a class="btn secondary" href="https://raw.githubusercontent.com/Proksima-Centauri/Astro-Ai-Plus/main/update_notifier.py" target="_blank" rel="noopener noreferrer">update_notifier.py</a>
+      </div>
+      <p class="api-note">Przykladowe lokalne API: <code>http://127.0.0.1:8787</code></p>
     </section>
 
     <footer>
