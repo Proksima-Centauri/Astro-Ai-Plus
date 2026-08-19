@@ -89,6 +89,24 @@
       background: #03040a;
     }
 
+    .lang-bar {
+      display: flex;
+      justify-content: flex-end;
+      margin: 0 auto 12px;
+      width: min(1080px, 92vw);
+    }
+
+    .lang-select {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(16, 23, 41, 0.82);
+      color: var(--text);
+      padding: 8px 12px;
+      font-family: "Space Grotesk", "Segoe UI", sans-serif;
+      font-size: 0.92rem;
+      cursor: pointer;
+    }
+
     .scroll-hint {
       position: fixed;
       left: 50%;
@@ -587,6 +605,53 @@
       color: var(--muted);
     }
 
+    .social-links {
+      display: grid;
+      gap: 10px;
+    }
+
+    .social-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      width: fit-content;
+      color: var(--text);
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    .social-link:hover {
+      color: #ffffff;
+      text-decoration: underline;
+    }
+
+    .social-icon {
+      width: 26px;
+      height: 26px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: rgba(173, 194, 255, 0.1);
+      flex-shrink: 0;
+    }
+
+    .social-icon svg {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+      display: block;
+    }
+
+    .social-link.youtube {
+      color: #ffb3b3;
+    }
+
+    .social-link.github {
+      color: #d5dbed;
+    }
+
     code {
       font-family: "JetBrains Mono", monospace;
       color: var(--accent-3);
@@ -660,6 +725,12 @@
 </head>
 <body>
   <div class="stars" aria-hidden="true"></div>
+  <div class="lang-bar">
+    <select id="langSelect" class="lang-select" aria-label="Wybierz jezyk strony">
+      <option value="pl">Polski</option>
+      <option value="en">English</option>
+    </select>
+  </div>
   <main class="wrap">
     <section class="intro card">
       <video autoplay muted playsinline controls preload="metadata">
@@ -670,15 +741,15 @@
 
     <section class="hero">
       <div class="hero-copy card">
-        <div class="eyebrow">Astrofotografia Desktop</div>
-        <h1>Obrabiaj zdjecia kosmosu szybciej i precyzyjniej</h1>
-        <p class="lead">
+        <div class="eyebrow" id="txtEyebrow">Astrofotografia Desktop</div>
+        <h1 id="txtHeroTitle">Obrabiaj zdjecia kosmosu szybciej i precyzyjniej</h1>
+        <p class="lead" id="txtHeroLead">
           Astro Ai Plus laczy klasyczne narzedzia edycji z funkcjami astro: analiza FWHM/SNR,
           plate solving, StarNet++, deepSNR, mozaika oraz animacje 3D FLY.
         </p>
         <div class="actions">
-          <a class="btn" href="https://drive.google.com/file/d/1kQIBxSWHUmUXAVNI-UZbxsIL72CGZc1D/view?usp=drive_link" target="_blank" rel="noopener noreferrer">Pobierz wersje Linux</a>
-          <a class="btn secondary" href="README.pl.md">Czytaj dokumentacje</a>
+          <a class="btn" id="btnDownloadHero" href="https://drive.google.com/file/d/1kQIBxSWHUmUXAVNI-UZbxsIL72CGZc1D/view?usp=drive_link" target="_blank" rel="noopener noreferrer">Pobierz wersje Linux</a>
+          <a class="btn secondary" id="btnDocs" href="README.pl.md">Czytaj dokumentacje</a>
         </div>
       </div>
 
@@ -689,31 +760,31 @@
 
     <section class="grid">
       <article class="feature card">
-        <h3>Workflow od razu po starcie</h3>
-        <p>Wczytaj obraz, popraw tonalnosc, uruchom analize i zapisz wynik bez opuszczania aplikacji.</p>
+        <h3 id="txtFeature1Title">Workflow od razu po starcie</h3>
+        <p id="txtFeature1Body">Wczytaj obraz, popraw tonalnosc, uruchom analize i zapisz wynik bez opuszczania aplikacji.</p>
       </article>
       <article class="feature card">
-        <h3>Narzedzia astro i AI</h3>
-        <p>Integracja z Astrometry.net, StarNet++, deepSNR i asystentem Altair (Gemini).</p>
+        <h3 id="txtFeature2Title">Narzedzia astro i AI</h3>
+        <p id="txtFeature2Body">Integracja z Astrometry.net, StarNet++, deepSNR i asystentem Altair (Gemini).</p>
       </article>
       <article class="feature card">
-        <h3>Formaty i warstwy</h3>
-        <p>Obsluga <code>.fits</code>, <code>.tiff</code>, <code>.png</code>, undo/redo, warstwy i historia krokow.</p>
+        <h3 id="txtFeature3Title">Formaty i warstwy</h3>
+        <p id="txtFeature3Body">Obsluga <code>.fits</code>, <code>.tiff</code>, <code>.png</code>, undo/redo, warstwy i historia krokow.</p>
       </article>
     </section>
 
     <section class="compare-grid">
       <article class="compare card">
-        <h3>Porownanie AI - deepSNR</h3>
-        <p>Przesun suwak, aby porownac obraz przed i po odszumianiu AI.</p>
+        <h3 id="txtCompare1Title">Porownanie AI - deepSNR</h3>
+        <p id="txtCompare1Body">Przesun suwak, aby porownac obraz przed i po odszumianiu AI.</p>
         <div class="compare-box" data-compare>
           <img class="compare-layer" src="assets/compare/deepsnr_before.png" alt="Porownanie deepSNR przed obrobka">
           <div class="compare-after-wrap">
             <img class="compare-layer" src="assets/compare/deepsnr_after.png" alt="Porownanie deepSNR po obrobce AI">
           </div>
           <div class="compare-divider" aria-hidden="true"></div>
-          <span class="compare-tag before">Przed</span>
-          <span class="compare-tag after">Po AI</span>
+          <span class="compare-tag before" data-before-tag>Przed</span>
+          <span class="compare-tag after" data-after-tag>Po AI</span>
           <input class="compare-slider" type="range" min="0" max="100" value="50" aria-label="Suwak porownania deepSNR">
         </div>
       </article>
@@ -722,16 +793,16 @@
 
     <section class="compare-stage">
       <article class="compare card">
-        <h3>Porownanie AI - Star Shrink</h3>
-        <p>Sprawdz, jak funkcja Star Shrink zmniejsza gwiazdy i poprawia czytelnosc obiektu.</p>
+        <h3 id="txtCompare2Title">Porownanie AI - Star Shrink</h3>
+        <p id="txtCompare2Body">Sprawdz, jak funkcja Star Shrink zmniejsza gwiazdy i poprawia czytelnosc obiektu.</p>
         <div class="compare-box" data-compare>
           <img class="compare-layer" src="assets/website/star-shrink/veli.png" alt="Porownanie przed funkcja Star Shrink">
           <div class="compare-after-wrap">
             <img class="compare-layer" src="assets/website/star-shrink/veli_shrinked.png" alt="Porownanie po funkcji Star Shrink">
           </div>
           <div class="compare-divider" aria-hidden="true"></div>
-          <span class="compare-tag before">Przed</span>
-          <span class="compare-tag after">Po AI</span>
+          <span class="compare-tag before" data-before-tag>Przed</span>
+          <span class="compare-tag after" data-after-tag>Po AI</span>
           <input class="compare-slider" type="range" min="0" max="100" value="50" aria-label="Suwak porownania Star Shrink">
         </div>
       </article>
@@ -739,26 +810,26 @@
 
     <section class="compare-stage">
       <article class="roadmap card">
-        <h3>Roadmapa rozwoju</h3>
-        <p>Graficzna os czasu projektu (z gory na dol). Na ten moment zawiera 1 punkt.</p>
+        <h3 id="txtRoadmapTitle">Roadmapa rozwoju</h3>
+        <p id="txtRoadmapBody">Graficzna os czasu projektu (z gory na dol). Na ten moment zawiera 1 punkt.</p>
         <div class="timeline" aria-label="Roadmapa Astro Ai Plus">
           <article class="timeline-item">
             <span class="timeline-date">2026-08-18</span>
-            <h4>Nowa strona produktu</h4>
-            <p>Uruchomienie strony z filmem intro, porownaniem AI i przyciskami pobierania.</p>
+            <h4 id="txtRoadmapItem1Title">Nowa strona produktu</h4>
+            <p id="txtRoadmapItem1Body">Uruchomienie strony z filmem intro, porownaniem AI i przyciskami pobierania.</p>
           </article>
           <article class="timeline-item">
-            <span class="timeline-date">Wkrotce</span>
-            <h4>Kolejny etap rozwoju</h4>
-            <p>Miejsce na nastepny kamien milowy projektu Astro Ai Plus.</p>
+            <span class="timeline-date" id="txtRoadmapSoon">Wkrotce</span>
+            <h4 id="txtRoadmapItem2Title">Kolejny etap rozwoju</h4>
+            <p id="txtRoadmapItem2Body">Miejsce na nastepny kamien milowy projektu Astro Ai Plus.</p>
           </article>
         </div>
       </article>
     </section>
 
     <section class="fly-preview card">
-      <h3>Podglad efektu 3D FLY</h3>
-      <p>Zobacz, jak wyglada finalna animacja wygenerowana narzedziem 3D FLY.</p>
+      <h3 id="txtFlyTitle">Podglad efektu 3D FLY</h3>
+      <p id="txtFlyBody">Zobacz, jak wyglada finalna animacja wygenerowana narzedziem 3D FLY.</p>
       <div class="fly-video-box">
         <video controls preload="metadata" playsinline>
           <source src="assets/3d_fly.mp4" type="video/mp4">
@@ -769,24 +840,24 @@
 
     <section class="download card">
       <div>
-        <h2>Gotowe do pobrania i uruchomienia</h2>
-        <p>Pobierasz gotowa wersje Linux z Google Drive (folder z aplikacja i <code>_internal</code>).</p>
+        <h2 id="txtDownloadTitle">Gotowe do pobrania i uruchomienia</h2>
+        <p id="txtDownloadBody">Pobierasz gotowa wersje Linux z Google Drive (folder z aplikacja i <code>_internal</code>).</p>
       </div>
-      <a class="btn" href="https://drive.google.com/file/d/1kQIBxSWHUmUXAVNI-UZbxsIL72CGZc1D/view?usp=drive_link" target="_blank" rel="noopener noreferrer">Pobierz teraz</a>
+      <a class="btn" id="btnDownloadNow" href="https://drive.google.com/file/d/1kQIBxSWHUmUXAVNI-UZbxsIL72CGZc1D/view?usp=drive_link" target="_blank" rel="noopener noreferrer">Pobierz teraz</a>
     </section>
 
     <section class="update-api card">
-      <h3>System aktualizacji (API + GUI)</h3>
-      <p>Do projektu dolaczony jest prosty serwer update API oraz klient z GUI do publikacji i sprawdzania nowych wersji.</p>
+      <h3 id="txtUpdateApiTitle">System aktualizacji (API + GUI)</h3>
+      <p id="txtUpdateApiBody">Do projektu dolaczony jest prosty serwer update API oraz klient z GUI do publikacji i sprawdzania nowych wersji.</p>
       <div class="actions">
         <a class="btn secondary" href="https://raw.githubusercontent.com/Proksima-Centauri/Astro-Ai-Plus/main/update_api_server.py" target="_blank" rel="noopener noreferrer">update_api_server.py</a>
         <a class="btn secondary" href="https://raw.githubusercontent.com/Proksima-Centauri/Astro-Ai-Plus/main/update_notifier.py" target="_blank" rel="noopener noreferrer">update_notifier.py</a>
       </div>
-      <p class="api-note">Przykladowe lokalne API: <code>http://127.0.0.1:8787</code></p>
+      <p class="api-note" id="txtUpdateApiNote">Przykladowe lokalne API: <code>http://127.0.0.1:8787</code></p>
     </section>
 
     <section class="faq card" id="faq">
-      <h3>FAQ</h3>
+      <h3 id="txtFaqTitle">FAQ</h3>
       <ul class="faq-list" aria-label="Najczesciej zadawane pytania">
         <li>
           <details class="faq-item">
@@ -902,8 +973,21 @@
     </section>
 
     <section class="update-api card" id="about">
-      <h3>About</h3>
-      <p>Subscribe on Youtube. <a href="https://www.youtube.com/@AstroPhotoSoft" target="_blank" rel="noopener noreferrer">https://www.youtube.com/@AstroPhotoSoft</a></p>
+      <h3 id="txtAboutTitle">About</h3>
+      <div class="social-links">
+        <a class="social-link youtube" href="https://www.youtube.com/@AstroPhotoSoft" target="_blank" rel="noopener noreferrer">
+          <span class="social-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.6 3.6 12 3.6 12 3.6s-7.6 0-9.4.5A3 3 0 0 0 .5 6.2 31 31 0 0 0 0 12a31 31 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.8.5 9.4.5 9.4.5s7.6 0 9.4-.5a3 3 0 0 0 2.1-2.1A31 31 0 0 0 24 12a31 31 0 0 0-.5-5.8zM9.6 15.7V8.3L16 12l-6.4 3.7z"/></svg>
+          </span>
+          <span id="txtAboutYoutubeLabel">Subscribe on Youtube.</span>
+        </a>
+        <a class="social-link github" href="https://github.com/Proksima-Centauri/Astro-Ai-Plus" target="_blank" rel="noopener noreferrer">
+          <span class="social-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5a12 12 0 0 0-3.8 23.4c.6.1.8-.2.8-.6v-2.2c-3.3.7-4-1.4-4-1.4-.6-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.9 1.2 1.9 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.6-1.3-5.6-6A4.7 4.7 0 0 1 6.4 8c-.1-.3-.6-1.5.1-3 0 0 1-.3 3.2 1.2a11.2 11.2 0 0 1 5.8 0c2.2-1.5 3.2-1.2 3.2-1.2.7 1.5.2 2.7.1 3A4.7 4.7 0 0 1 20 11.4c0 4.7-2.9 5.7-5.6 6 .4.4.9 1.1.9 2.1v3.2c0 .4.2.7.8.6A12 12 0 0 0 12 .5z"/></svg>
+          </span>
+          <span id="txtAboutGithubLabel">Pull request on GitHub.</span>
+        </a>
+      </div>
     </section>
 
     <footer>
@@ -915,6 +999,159 @@
 
   <script>
     document.getElementById("year").textContent = new Date().getFullYear();
+
+    const i18n = {
+      pl: {
+        langCode: "pl",
+        pageTitle: "Astro Ai Plus - pobierz aplikacje",
+        pageDescription: "Astro Ai Plus - desktopowa aplikacja do obrobki astrofotografii. Pobierz gotowa wersje i zacznij obrabiac zdjecia kosmosu.",
+        docsHref: "README.pl.md",
+        scrollHint: "SCROLL DOWN",
+        txtEyebrow: "Astrofotografia Desktop",
+        txtHeroTitle: "Obrabiaj zdjecia kosmosu szybciej i precyzyjniej",
+        txtHeroLead: "Astro Ai Plus laczy klasyczne narzedzia edycji z funkcjami astro: analiza FWHM/SNR, plate solving, StarNet++, deepSNR, mozaika oraz animacje 3D FLY.",
+        btnDownloadHero: "Pobierz wersje Linux",
+        btnDocs: "Czytaj dokumentacje",
+        txtFeature1Title: "Workflow od razu po starcie",
+        txtFeature1Body: "Wczytaj obraz, popraw tonalnosc, uruchom analize i zapisz wynik bez opuszczania aplikacji.",
+        txtFeature2Title: "Narzedzia astro i AI",
+        txtFeature2Body: "Integracja z Astrometry.net, StarNet++, deepSNR i asystentem Altair (Gemini).",
+        txtFeature3Title: "Formaty i warstwy",
+        txtFeature3Body: "Obsluga <code>.fits</code>, <code>.tiff</code>, <code>.png</code>, undo/redo, warstwy i historia krokow.",
+        txtCompare1Title: "Porownanie AI - deepSNR",
+        txtCompare1Body: "Przesun suwak, aby porownac obraz przed i po odszumianiu AI.",
+        txtCompare2Title: "Porownanie AI - Star Shrink",
+        txtCompare2Body: "Sprawdz, jak funkcja Star Shrink zmniejsza gwiazdy i poprawia czytelnosc obiektu.",
+        txtTagBefore: "Przed",
+        txtTagAfter: "Po AI",
+        txtRoadmapTitle: "Roadmapa rozwoju",
+        txtRoadmapBody: "Graficzna os czasu projektu (z gory na dol). Na ten moment zawiera 1 punkt.",
+        txtRoadmapItem1Title: "Nowa strona produktu",
+        txtRoadmapItem1Body: "Uruchomienie strony z filmem intro, porownaniem AI i przyciskami pobierania.",
+        txtRoadmapSoon: "Wkrotce",
+        txtRoadmapItem2Title: "Kolejny etap rozwoju",
+        txtRoadmapItem2Body: "Miejsce na nastepny kamien milowy projektu Astro Ai Plus.",
+        txtFlyTitle: "Podglad efektu 3D FLY",
+        txtFlyBody: "Zobacz, jak wyglada finalna animacja wygenerowana narzedziem 3D FLY.",
+        txtDownloadTitle: "Gotowe do pobrania i uruchomienia",
+        txtDownloadBody: "Pobierasz gotowa wersje Linux z Google Drive (folder z aplikacja i <code>_internal</code>).",
+        btnDownloadNow: "Pobierz teraz",
+        txtUpdateApiTitle: "System aktualizacji (API + GUI)",
+        txtUpdateApiBody: "Do projektu dolaczony jest prosty serwer update API oraz klient z GUI do publikacji i sprawdzania nowych wersji.",
+        txtUpdateApiNote: "Przykladowe lokalne API: <code>http://127.0.0.1:8787</code>",
+        txtFaqTitle: "FAQ",
+        txtAboutTitle: "About",
+        txtAboutYoutubeLabel: "Subscribe on Youtube.",
+        txtAboutGithubLabel: "Pull request on GitHub.",
+      },
+      en: {
+        langCode: "en",
+        pageTitle: "Astro Ai Plus - download app",
+        pageDescription: "Astro Ai Plus - desktop astrophotography processing app. Download a ready build and start editing your space photos.",
+        docsHref: "README.en.md",
+        scrollHint: "SCROLL DOWN",
+        txtEyebrow: "Desktop Astrophotography",
+        txtHeroTitle: "Process space photos faster and more precisely",
+        txtHeroLead: "Astro Ai Plus combines classic editing tools with astro features: FWHM/SNR analysis, plate solving, StarNet++, deepSNR, mosaics, and 3D FLY animations.",
+        btnDownloadHero: "Download Linux build",
+        btnDocs: "Read docs",
+        txtFeature1Title: "Workflow from the first launch",
+        txtFeature1Body: "Load an image, correct tone, run analysis, and save results without leaving the app.",
+        txtFeature2Title: "Astro and AI tools",
+        txtFeature2Body: "Integration with Astrometry.net, StarNet++, deepSNR, and Altair assistant (Gemini).",
+        txtFeature3Title: "Formats and layers",
+        txtFeature3Body: "Support for <code>.fits</code>, <code>.tiff</code>, <code>.png</code>, undo/redo, layers, and edit history.",
+        txtCompare1Title: "AI comparison - deepSNR",
+        txtCompare1Body: "Move the slider to compare the image before and after AI denoise.",
+        txtCompare2Title: "AI comparison - Star Shrink",
+        txtCompare2Body: "See how Star Shrink reduces stars and improves object readability.",
+        txtTagBefore: "Before",
+        txtTagAfter: "After AI",
+        txtRoadmapTitle: "Development roadmap",
+        txtRoadmapBody: "Visual project timeline (top to bottom). At this moment it contains one milestone.",
+        txtRoadmapItem1Title: "New product website",
+        txtRoadmapItem1Body: "Launch of the page with intro video, AI comparison, and download buttons.",
+        txtRoadmapSoon: "Soon",
+        txtRoadmapItem2Title: "Next development stage",
+        txtRoadmapItem2Body: "Space for the next Astro Ai Plus project milestone.",
+        txtFlyTitle: "3D FLY effect preview",
+        txtFlyBody: "See how the final animation generated with 3D FLY looks.",
+        txtDownloadTitle: "Ready to download and run",
+        txtDownloadBody: "Download a ready Linux build from Google Drive (folder with app and <code>_internal</code>).",
+        btnDownloadNow: "Download now",
+        txtUpdateApiTitle: "Update system (API + GUI)",
+        txtUpdateApiBody: "The project includes a simple update API server and a GUI client for publishing and checking new versions.",
+        txtUpdateApiNote: "Example local API: <code>http://127.0.0.1:8787</code>",
+        txtFaqTitle: "FAQ",
+        txtAboutTitle: "About",
+        txtAboutYoutubeLabel: "Subscribe on Youtube.",
+        txtAboutGithubLabel: "Pull request on GitHub.",
+      },
+    };
+
+    function setText(id, value, asHtml = false) {
+      const el = document.getElementById(id);
+      if (!el || typeof value !== "string") return;
+      if (asHtml) {
+        el.innerHTML = value;
+      } else {
+        el.textContent = value;
+      }
+    }
+
+    function applyLanguage(lang) {
+      const dict = i18n[lang] || i18n.pl;
+      document.documentElement.lang = dict.langCode;
+      document.title = dict.pageTitle;
+      const desc = document.querySelector('meta[name="description"]');
+      if (desc) desc.setAttribute("content", dict.pageDescription);
+
+      const htmlIds = new Set([
+        "txtFeature3Body",
+        "txtDownloadBody",
+        "txtUpdateApiNote",
+      ]);
+      Object.keys(dict).forEach((key) => {
+        if (key === "langCode" || key === "pageTitle" || key === "pageDescription" || key === "docsHref" || key === "scrollHint") {
+          return;
+        }
+        setText(key, dict[key], htmlIds.has(key));
+      });
+
+      document.querySelectorAll("[data-before-tag]").forEach((el) => {
+        el.textContent = dict.txtTagBefore;
+      });
+      document.querySelectorAll("[data-after-tag]").forEach((el) => {
+        el.textContent = dict.txtTagAfter;
+      });
+
+      const docsBtn = document.getElementById("btnDocs");
+      if (docsBtn) docsBtn.setAttribute("href", dict.docsHref);
+
+      const scrollHint = document.getElementById("scrollHint");
+      if (scrollHint) scrollHint.textContent = dict.scrollHint;
+    }
+
+    const langSelect = document.getElementById("langSelect");
+    let savedLang = "pl";
+    try {
+      savedLang = localStorage.getItem("site_lang") || "pl";
+    } catch (_err) {
+      savedLang = "pl";
+    }
+    if (langSelect) {
+      langSelect.value = i18n[savedLang] ? savedLang : "pl";
+      langSelect.addEventListener("change", () => {
+        const nextLang = langSelect.value;
+        try {
+          localStorage.setItem("site_lang", nextLang);
+        } catch (_err) {
+          // ignore localStorage write issues
+        }
+        applyLanguage(nextLang);
+      });
+    }
+    applyLanguage(savedLang);
 
     document.querySelectorAll("[data-compare]").forEach((box) => {
       const slider = box.querySelector(".compare-slider");
