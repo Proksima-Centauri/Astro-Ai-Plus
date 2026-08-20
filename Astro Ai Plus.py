@@ -721,6 +721,7 @@ I18N = {
     "action_3d_fly": {"pl": "Filtr 3D FLY", "en": "3D FLY Filter"},
     "action_blur": {"pl": "Rozmycie Gaussa", "en": "Gaussian Blur"},
     "action_background_extraction": {"pl": "Ekstrakcja tła", "en": "Background Extraction"},
+    "action_deconvolution": {"pl": "Dekonwolucja", "en": "Deconvolution"},
     "action_local_contrast": {"pl": "Kontrast lokalny", "en": "Local Contrast Enhancement"},
     "action_rotate": {"pl": "Obrót", "en": "Rotate"},
     "action_crop": {"pl": "Kadruj", "en": "Crop"},
@@ -748,6 +749,7 @@ I18N = {
     "top_3d_fly": {"pl": "3D FLY", "en": "3D FLY"},
     "top_blur": {"pl": "Blur", "en": "Blur"},
     "top_background_extraction": {"pl": "Tło", "en": "BG"},
+    "top_deconvolution": {"pl": "Dekonw.", "en": "Deconv"},
     "top_local_contrast": {"pl": "Lokalny", "en": "Local"},
     "top_rotate": {"pl": "Obrót", "en": "Rotate"},
     "top_crop": {"pl": "Kadr", "en": "Crop"},
@@ -821,6 +823,7 @@ AUTO_TEXT_MAP = {
     "3D FLY Filter": {"pl": "Filtr 3D FLY", "en": "3D FLY Filter"},
     "Gaussian Blur": {"pl": "Rozmycie Gaussa", "en": "Gaussian Blur"},
     "Background Extraction": {"pl": "Ekstrakcja tła", "en": "Background Extraction"},
+    "Deconvolution": {"pl": "Dekonwolucja", "en": "Deconvolution"},
     "Local Contrast Enhancement": {"pl": "Kontrast lokalny", "en": "Local Contrast Enhancement"},
     "Rotate": {"pl": "Obrót", "en": "Rotate"},
     "Crop": {"pl": "Kadruj", "en": "Crop"},
@@ -2975,6 +2978,73 @@ class BackgroundExtractionDialog(QDialog):
     def get_parameters(self) -> dict:
         return {
             "smoothing": int(self.sld_smoothing.value()),
+        }
+
+
+class DeconvolutionDialog(QDialog):
+    def __init__(self, parent=None, model_path: str = "", mode: str = "stellar", strength: int = 50):
+        super().__init__(parent)
+        apply_dialog_window_flags(self)
+        self.setWindowTitle("Deconvolution")
+        self.setMinimumWidth(430)
+
+        layout = QVBoxLayout(self)
+        apply_standard_layout_margins(layout)
+
+        self.lbl_info = QLabel("Deconvolution settings: method and strength.")
+        self.lbl_info.setWordWrap(True)
+        layout.addWidget(self.lbl_info)
+
+        self.lbl_model = QLabel("")
+        self.lbl_model.setWordWrap(True)
+        layout.addWidget(self.lbl_model)
+
+        row_mode = QHBoxLayout()
+        row_mode.addWidget(QLabel("Method:"))
+        self.combo_mode = QComboBox()
+        self.combo_mode.addItem("Stellar", "stellar")
+        self.combo_mode.addItem("Non-stellar", "nonstellar")
+        row_mode.addWidget(self.combo_mode, 1)
+        layout.addLayout(row_mode)
+
+        self.lbl_strength = QLabel("Strength: 50%")
+        layout.addWidget(self.lbl_strength)
+        self.sld_strength = QSlider(Qt.Horizontal)
+        self.sld_strength.setRange(0, 100)
+        self.sld_strength.valueChanged.connect(lambda v: self.lbl_strength.setText(f"Strength: {int(v)}%"))
+        layout.addWidget(self.sld_strength)
+
+        button_layout = QHBoxLayout()
+        self.btn_run = QPushButton("Run")
+        self.btn_run.setProperty("accent", True)
+        self.btn_cancel = QPushButton("Cancel")
+        button_layout.addWidget(self.btn_run)
+        button_layout.addWidget(self.btn_cancel)
+        layout.addLayout(button_layout)
+
+        self.btn_run.clicked.connect(self.accept)
+        self.btn_cancel.clicked.connect(self.reject)
+
+        self.set_parameters(model_path=model_path, mode=mode, strength=strength)
+
+    def set_parameters(self, model_path: str = "", mode: str = "stellar", strength: int = 50):
+        basename = os.path.basename(str(model_path or "").strip())
+        self.lbl_model.setText(f"Model: {basename if basename else 'Not selected in Preferences'}")
+
+        wanted_mode = str(mode or "stellar").strip().lower()
+        idx = 0
+        for i in range(self.combo_mode.count()):
+            if str(self.combo_mode.itemData(i) or "").strip().lower() == wanted_mode:
+                idx = i
+                break
+        self.combo_mode.setCurrentIndex(idx)
+
+        self.sld_strength.setValue(max(0, min(100, int(strength or 0))))
+
+    def get_parameters(self) -> dict:
+        return {
+            "mode": str(self.combo_mode.currentData() or "stellar"),
+            "strength": int(self.sld_strength.value()),
         }
 
 
@@ -11414,7 +11484,13 @@ def _apply_background_extraction_like_graxpert(source_u8: np.ndarray, model_outp
     return np.clip(corrected * 255.0, 0.0, 255.0).astype(np.uint8)
 
 
-def _blend_deconvolution_like_graxpert(source_u8: np.ndarray, restored_u8: np.ndarray) -> np.ndarray:
+def _blend_deconvolution_like_graxpert(
+    source_u8: np.ndarray,
+    restored_u8: np.ndarray,
+    strength: float = 0.5,
+    psf_size: float = 3.5,
+    deconvolution_mode: str = "stellar",
+) -> np.ndarray:
     if source_u8 is None or restored_u8 is None:
         return source_u8
     if restored_u8.shape[:2] != source_u8.shape[:2]:
@@ -11423,12 +11499,30 @@ def _blend_deconvolution_like_graxpert(source_u8: np.ndarray, restored_u8: np.nd
     source_f = source_u8.astype(np.float32) / 255.0
     restored_f = restored_u8.astype(np.float32) / 255.0
 
-    src_gray = cv2.cvtColor(source_u8, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-    edge = cv2.Laplacian(src_gray, cv2.CV_32F, ksize=3)
-    edge_strength = np.clip(np.abs(edge) * 2.5, 0.0, 1.0)
-    edge_strength = cv2.GaussianBlur(edge_strength, (0, 0), 0.9)
+    mode = str(deconvolution_mode or "stellar").strip().lower()
+    strength01 = float(np.clip(strength, 0.0, 1.0))
+    psf = float(np.clip(psf_size, 0.5, 14.0))
+    psf_norm = float((psf - 0.5) / (14.0 - 0.5))
 
-    blend = np.clip(0.35 + edge_strength * 0.55, 0.0, 0.9)
+    src_gray = cv2.cvtColor(source_u8, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+    if mode in ("nonstellar", "non-stellar", "object", "deconv-obj"):
+        src_gray_for_edges = cv2.GaussianBlur(src_gray, (0, 0), 0.8 + psf_norm * 1.8)
+        edge = cv2.Laplacian(src_gray_for_edges, cv2.CV_32F, ksize=3)
+        edge_gain = 1.6
+        smooth_sigma = 1.2 + psf_norm * 2.4
+        base_blend = 0.20 + 0.35 * strength01
+        edge_blend = 0.25 + 0.30 * strength01
+    else:
+        edge = cv2.Laplacian(src_gray, cv2.CV_32F, ksize=3)
+        edge_gain = 2.6
+        smooth_sigma = 0.7 + psf_norm * 1.4
+        base_blend = 0.18 + 0.25 * strength01
+        edge_blend = 0.35 + 0.35 * strength01
+
+    edge_strength = np.clip(np.abs(edge) * edge_gain, 0.0, 1.0)
+    edge_strength = cv2.GaussianBlur(edge_strength, (0, 0), smooth_sigma)
+
+    blend = np.clip(base_blend + edge_strength * edge_blend, 0.0, 0.95)
     blend = blend[:, :, np.newaxis]
     merged = np.clip(source_f * (1.0 - blend) + restored_f * blend, 0.0, 1.0)
     return np.clip(merged * 255.0, 0.0, 255.0).astype(np.uint8)
@@ -14499,6 +14593,7 @@ class ConsoleWindow(QDialog):
             "run.starnet": "starnet++",
             "run.starnet++": "starnet++",
             "run.deepsnr": "deepsnr",
+            "run.deconvolution": "deconvolution",
             "open.blur": "blur",
             "open.lce": "local contrast",
             "save": "save",
@@ -14514,6 +14609,7 @@ class PhotoshopMenuPanel(QFrame):
         ("stars", "Stars"),
         ("blur", "Gaussian Blur"),
         ("background_extraction", "Background Extraction"),
+        ("deconvolution", "Deconvolution"),
         ("local_contrast", "Local Contrast Enhancement"),
         ("background", "Background"),
         ("plate_solve_overlay", "Plate Solve Overlay"),
@@ -17403,6 +17499,7 @@ class AstroApp(QMainWindow):
             "background": "Background",
             "blur": "Gaussian Blur",
             "background_extraction": "Background Extraction",
+            "deconvolution": "Deconvolution",
             "local_contrast": "Local Contrast Enhancement",
             "stars": "Stars",
             "curves": "Curves",
@@ -17416,6 +17513,7 @@ class AstroApp(QMainWindow):
             "background": True,
             "blur": True,
             "background_extraction": True,
+            "deconvolution": True,
             "local_contrast": True,
             "stars": True,
             "curves": True,
@@ -17450,6 +17548,7 @@ class AstroApp(QMainWindow):
             "background": "raster",
             "blur": "effect",
             "background_extraction": "effect",
+            "deconvolution": "effect",
             "local_contrast": "effect",
             "stars": "effect",
             "curves": "adjustment",
@@ -17473,6 +17572,7 @@ class AstroApp(QMainWindow):
         self.ai_assistant_panel = None
         self.blur_dialog = None
         self.background_extraction_dialog = None
+        self.deconvolution_dialog = None
         self.local_contrast_dialog = None
         self.crop_dialog = None
         self.color_calibration_dialog = None
@@ -17840,6 +17940,18 @@ class AstroApp(QMainWindow):
                 model_path=self.bg_removal_model_path,
             )
         return self.background_extraction_dialog
+
+    def _get_deconvolution_dialog(self):
+        if self.deconvolution_dialog is None:
+            self.deconvolution_dialog = DeconvolutionDialog(
+                self,
+                model_path=self.deconvolution_model_path,
+            )
+        else:
+            self.deconvolution_dialog.set_parameters(
+                model_path=self.deconvolution_model_path,
+            )
+        return self.deconvolution_dialog
 
     def _get_local_contrast_dialog(self):
         if self.local_contrast_dialog is None:
@@ -18280,6 +18392,34 @@ class AstroApp(QMainWindow):
             return self.run_image_analysis(log_result=False)
         return self.latest_image_analysis
 
+    def _estimate_deconvolution_psf_px(self) -> float:
+        default_psf = 3.5
+        try:
+            analysis = self.get_or_run_image_analysis() or {}
+        except Exception:
+            return default_psf
+
+        stars = analysis.get("stars", {}) if isinstance(analysis, dict) else {}
+        fwhm_candidates = [
+            stars.get("fwhm_px_median"),
+            stars.get("fwhm_px_mean"),
+        ]
+        top_stars = stars.get("top_stars") if isinstance(stars, dict) else None
+        if isinstance(top_stars, list) and top_stars:
+            top_vals = [float(item.get("fwhm_px")) for item in top_stars if isinstance(item, dict) and item.get("fwhm_px") is not None]
+            if top_vals:
+                fwhm_candidates.append(float(np.median(np.asarray(top_vals, dtype=np.float32))))
+
+        for value in fwhm_candidates:
+            try:
+                fwhm = float(value)
+            except Exception:
+                continue
+            if np.isfinite(fwhm) and fwhm > 0.0:
+                return float(np.clip(fwhm, 0.5, 14.0))
+
+        return default_psf
+
     def get_effective_magic_img(self):
         if self.original_img is None:
             return None
@@ -18454,6 +18594,9 @@ class AstroApp(QMainWindow):
         if lower in ("blur", "gaussian blur", "gaussian"):
             self.apply_gaussian_blur_filter()
             return
+        if lower in ("deconvolution", "deconv", "run deconvolution", "run.deconvolution"):
+            self.run_deconvolution_onnx()
+            return
         if lower in ("background extraction", "background extract", "extract background", "bg extraction", "bge"):
             self.run_background_extraction()
             return
@@ -18604,6 +18747,7 @@ class AstroApp(QMainWindow):
             "3d fly                   render starless 3D fly-through clip",
             "analyze / analizuj       compute FWHM and image metrics",
             "blur                     open Gaussian Blur dialog",
+            "deconvolution / deconv   run ONNX deconvolution",
             "background extraction    run ONNX background extraction",
             "local contrast / lce     open Local Contrast Enhancement dialog",
             "rotate                   open Rotate dialog",
@@ -19378,6 +19522,7 @@ class AstroApp(QMainWindow):
             ("action_auto_stretch", "action_auto_stretch", "AutoStretch"),
             ("action_blur", "action_blur", "Gaussian Blur"),
             ("action_background_extraction", "action_background_extraction", "Background Extraction"),
+            ("action_deconvolution", "action_deconvolution", "Deconvolution"),
             ("action_local_contrast", "action_local_contrast", "Local Contrast Enhancement"),
             ("action_rotate", "action_rotate", "Rotate"),
             ("action_crop", "action_crop", "Crop"),
@@ -19415,6 +19560,7 @@ class AstroApp(QMainWindow):
             ("btn_3d_fly_top", "top_3d_fly", "3D FLY"),
             ("btn_blur_top", "top_blur", "Blur"),
             ("btn_background_extraction_top", "top_background_extraction", "BG"),
+            ("btn_deconvolution_top", "top_deconvolution", "Deconv"),
             ("btn_local_contrast_top", "top_local_contrast", "Local"),
             ("btn_rotate_top", "top_rotate", "Rotate"),
             ("btn_crop_top", "top_crop", "Crop"),
@@ -19469,6 +19615,7 @@ class AstroApp(QMainWindow):
             "preferences_dialog",
             "plate_solving_dialog",
             "blur_dialog",
+            "deconvolution_dialog",
             "plate_solve_dialog",
             "starnet_dialog",
             "mosaic_dialog",
@@ -20564,6 +20711,10 @@ class AstroApp(QMainWindow):
         self.action_background_extraction.triggered.connect(self.run_background_extraction)
         self.action_background_extraction.setEnabled(False)
 
+        self.action_deconvolution = QAction("Deconvolution", self)
+        self.action_deconvolution.triggered.connect(self.run_deconvolution_onnx)
+        self.action_deconvolution.setEnabled(False)
+
         self.action_local_contrast = QAction("Local Contrast Enhancement", self)
         self.action_local_contrast.triggered.connect(self.apply_local_contrast_filter)
         self.action_local_contrast.setEnabled(False)
@@ -20656,6 +20807,7 @@ class AstroApp(QMainWindow):
         self.btn_3d_fly_top = _add_top_btn("3D FLY", action=self.action_3d_fly)
         self.btn_blur_top = _add_top_btn("Blur", action=self.action_blur)
         self.btn_background_extraction_top = _add_top_btn("BG", action=self.action_background_extraction)
+        self.btn_deconvolution_top = _add_top_btn("Deconv", action=self.action_deconvolution)
         self.btn_local_contrast_top = _add_top_btn("Local", action=self.action_local_contrast)
         self.btn_rotate_top = _add_top_btn("Rotate", action=self.action_rotate)
         self.btn_crop_top = _add_top_btn("Crop", action=self.action_crop)
@@ -20698,6 +20850,7 @@ class AstroApp(QMainWindow):
             "btn_3d_fly_top",
             "btn_blur_top",
             "btn_background_extraction_top",
+            "btn_deconvolution_top",
             "btn_local_contrast_top",
             "btn_rotate_top",
             "btn_crop_top",
@@ -20752,6 +20905,8 @@ class AstroApp(QMainWindow):
             "btn_deepsnr_top": "deepsnr.svg",
             "btn_3d_fly_top": "fly3d.svg",
             "btn_blur_top": "blur.svg",
+            "btn_background_extraction_top": "background_extraction.svg",
+            "btn_deconvolution_top": "deconvolution.svg",
             "btn_local_contrast_top": "blur.svg",
             "btn_rotate_top": "rotate.svg",
             "btn_crop_top": "crop.svg",
@@ -22287,6 +22442,16 @@ class AstroApp(QMainWindow):
             self.log("Deconvolution skipped: select Deconvolution ONNX model in Preferences.", "warning")
             return
 
+        dialog = self._get_deconvolution_dialog()
+        if dialog.exec_() != QDialog.Accepted:
+            self.log("Deconvolution canceled.", "warning")
+            return
+        dialog_params = dialog.get_parameters()
+        deconv_mode = str(dialog_params.get("mode", "stellar") or "stellar").strip().lower()
+        deconv_strength_percent = int(dialog_params.get("strength", 50) or 50)
+        deconv_strength = float(np.clip(deconv_strength_percent, 0, 100)) / 100.0
+        deconv_psf = float(self._estimate_deconvolution_psf_px())
+
         source = normalize_to_uint8_bgr(self.magic_img)
         if source is None or source.size == 0:
             self.log("Deconvolution skipped: invalid source image.", "warning")
@@ -22315,7 +22480,13 @@ class AstroApp(QMainWindow):
                 overall_start=0,
                 overall_end=90,
             )
-            result = _blend_deconvolution_like_graxpert(source, restored)
+            result = _blend_deconvolution_like_graxpert(
+                source,
+                restored,
+                strength=deconv_strength,
+                psf_size=deconv_psf,
+                deconvolution_mode=deconv_mode,
+            )
         except Exception as exc:
             progress_dialog.close()
             self.log(f"Deconvolution ONNX failed: {exc}", "error")
@@ -22328,9 +22499,17 @@ class AstroApp(QMainWindow):
         self.levels_window.levels_widget.set_image(self.magic_img)
         self.viewer.set_before(np_to_qpixmap(self.magic_img))
         self.apply_full_processing()
-        self.add_thumbnail("Deconvolution ONNX", self.processed_img)
+        self.add_layer("deconvolution", self.magic_img, title="Deconvolution")
+        self.add_thumbnail(
+            f"Deconvolution ({'stellar' if deconv_mode == 'stellar' else 'non-stellar'}, PSF={deconv_psf:.1f}, S={deconv_strength_percent}%)",
+            self.processed_img,
+        )
         self.update_menu_actions()
-        self.log("Deconvolution ONNX finished.", "success")
+        self.log(
+            f"Deconvolution ONNX finished. Mode: {'stellar' if deconv_mode == 'stellar' else 'non-stellar'}, "
+            f"PSF (auto): {deconv_psf:.1f}px, Strength: {deconv_strength_percent}%.",
+            "success",
+        )
 
     def run_starnet(self):
         if self.magic_img is None:
@@ -24342,6 +24521,7 @@ class AstroApp(QMainWindow):
             "action_star_correction",
             "action_blur",
             "action_background_extraction",
+            "action_deconvolution",
             "action_local_contrast",
             "action_rotate",
             "action_crop",
