@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://proksima-centauri.github.io/Astro-Ai-Plus/sitemap.xml
